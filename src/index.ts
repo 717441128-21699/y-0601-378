@@ -91,11 +91,23 @@ export class SurvivalSDK {
 
     const self = this;
     const callbacks: CraftingCallbacks = {
-      getItemCount: (id) => self.resource.getItemCount(id),
-      consumeItemByDefId: (id, qty) => self.resource.consumeItemByDefId(id, qty),
-      hasTool: (id) => self.resource.hasItem(id),
+      getItemCount: (id) => {
+        if (self.external.getItemCount) return self.external.getItemCount(id);
+        return self.resource.getItemCount(id);
+      },
+      consumeItemByDefId: (id, qty) => {
+        if (self.external.consumeItemByDefId) return self.external.consumeItemByDefId(id, qty);
+        return self.resource.consumeItemByDefId(id, qty);
+      },
+      hasTool: (id) => {
+        if (self.external.hasItem) return self.external.hasItem(id);
+        return self.resource.hasItem(id);
+      },
       addItem: (id, qty) => self.resource.addItem(id, qty),
-      addItemWithOverflow: (id, qty) => self.resource.addItemWithOverflow(id, qty),
+      addItemWithOverflow: (id, qty) => {
+        if (self.external.addItemWithOverflow) return self.external.addItemWithOverflow(id, qty);
+        return self.resource.addItemWithOverflow(id, qty);
+      },
       getSkillLevel: () => self.getEffectiveSkillLevel(),
       hasFacility: (type) => self.getEffectiveHasFacility(type),
       getFacilityName: (type) => {
@@ -103,9 +115,16 @@ export class SurvivalSDK {
         return facilities.length > 0 ? facilities[0].name : null;
       },
       getInventoryFreeSlots: () => self.getEffectiveFreeSlots(),
-      isFood: (id) => self.resource.isFood(id),
-      isTool: (id) => self.resource.isTool(id),
+      isFood: (id) => {
+        if (self.external.isItemFood) return self.external.isItemFood(id);
+        return self.resource.isFood(id);
+      },
+      isTool: (id) => {
+        if (self.external.isItemTool) return self.external.isItemTool(id);
+        return self.resource.isTool(id);
+      },
       hasExistingStack: (id) => {
+        if (self.external.hasExistingStack) return self.external.hasExistingStack(id);
         const inv = self.resource.getInventory();
         return inv.items.some((i) => i.defId === id && i.currentSpoilage !== undefined && i.currentSpoilage < 100);
       },
@@ -134,9 +153,14 @@ export class SurvivalSDK {
     return this.resource.getInventoryCapacity();
   }
 
+  private getEffectiveInventoryUsed(): number {
+    if (this.external.getInventoryUsed) return this.external.getInventoryUsed();
+    return this.resource.getInventoryUsed();
+  }
+
   private getEffectiveFreeSlots(): number {
     const capacity = this.getEffectiveInventoryCapacity();
-    const used = this.resource.getInventoryUsed();
+    const used = this.getEffectiveInventoryUsed();
     return Math.max(0, capacity - used);
   }
 
@@ -153,6 +177,30 @@ export class SurvivalSDK {
 
   getInventoryCapacity(): number {
     return this.getEffectiveInventoryCapacity();
+  }
+
+  getInventoryUsed(): number {
+    return this.getEffectiveInventoryUsed();
+  }
+
+  getInventoryFreeSlots(): number {
+    return this.getEffectiveFreeSlots();
+  }
+
+  isItemFood(defId: string): boolean {
+    if (this.external.isItemFood) return this.external.isItemFood(defId);
+    return this.resource.isFood(defId);
+  }
+
+  isItemTool(defId: string): boolean {
+    if (this.external.isItemTool) return this.external.isItemTool(defId);
+    return this.resource.isTool(defId);
+  }
+
+  hasExistingItemStack(defId: string): boolean {
+    if (this.external.hasExistingStack) return this.external.hasExistingStack(defId);
+    const inv = this.resource.getInventory();
+    return inv.items.some((i) => i.defId === defId && i.currentSpoilage !== undefined && i.currentSpoilage < 100);
   }
 
   getCampWarmthBonus(): number {
@@ -173,8 +221,8 @@ export class SurvivalSDK {
     return this.crafting.previewGather(sourceId, toolBonus);
   }
 
-  craft(recipeId: string): CraftResult {
-    const result = this.crafting.craft(recipeId);
+  craft(recipeId: string, expectedPlan?: CraftPreview): CraftResult {
+    const result = this.crafting.craft(recipeId, expectedPlan);
     if (result.success) {
       const recipe = this.crafting.getRecipe(recipeId);
       this.timeline.record('craft', this._dayCounter, {
@@ -410,6 +458,7 @@ export class SurvivalSDK {
       crafting: this.crafting.getSnapshot(),
       event: this.event.getSnapshot(),
       achievement: this.achievement.getSnapshot(),
+      timeline: this.timeline.getSnapshot(),
       sdk: {
         dayCounter: this._dayCounter,
         hoursInCurrentDay: this._hoursInCurrentDay,
@@ -427,6 +476,9 @@ export class SurvivalSDK {
     this.crafting.loadSnapshot(snapshot.crafting);
     this.event.loadSnapshot(snapshot.event);
     this.achievement.loadSnapshot(snapshot.achievement);
+    if (snapshot.timeline) {
+      this.timeline.loadSnapshot(snapshot.timeline);
+    }
 
     this._dayCounter = snapshot.sdk.dayCounter;
     this._hoursInCurrentDay = snapshot.sdk.hoursInCurrentDay;

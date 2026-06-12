@@ -217,11 +217,25 @@ export interface GatheredItem {
 export interface GatherPreview {
   canGather: boolean;
   reason: string;
-  potentialDrops: { itemId: string; name: string; minQty: number; maxQty: number; chance: number; isFood: boolean }[];
+  potentialDrops: {
+    itemId: string;
+    name: string;
+    minQty: number;
+    maxQty: number;
+    chance: number;
+    isFood: boolean;
+    hasExistingStack: boolean;
+    minSlotsNeeded: number;
+    maxSlotsNeeded: number;
+    estimatedAddable: number;
+    estimatedOverflow: number;
+  }[];
   freeSlots: number;
   estimatedMinSlotsNeeded: number;
   estimatedMaxSlotsNeeded: number;
   estimatedMaxItems: number;
+  estimatedTotalAddable: number;
+  estimatedTotalOverflow: number;
   potentialOverflow: boolean;
   tipText: string;
 }
@@ -295,6 +309,11 @@ export interface CraftPreview {
   actualAddable: number;
   unlockStatus: 'unlocked' | 'locked' | 'no_condition';
   blockReasons: string[];
+  executability: 'full' | 'partial' | 'none';
+  willConsumeMaterials: boolean;
+  materialsAtRisk: RecipeMaterial[];
+  planValid: boolean;
+  planToken: string;
   tipText: string;
 }
 
@@ -512,6 +531,14 @@ export interface ExternalCallbacks {
   getCampWarmthBonus?: () => number;
   getCampSafetyBonus?: () => number;
   getInventoryCapacity?: () => number;
+  getInventoryUsed?: () => number;
+  isItemFood?: (defId: string) => boolean;
+  isItemTool?: (defId: string) => boolean;
+  hasExistingStack?: (defId: string) => boolean;
+  getItemCount?: (defId: string) => number;
+  consumeItemByDefId?: (defId: string, quantity: number) => boolean;
+  hasItem?: (defId: string, quantity?: number) => boolean;
+  addItemWithOverflow?: (defId: string, quantity: number) => { added: InventoryItem[]; overflowCount: number };
 }
 
 export interface SurvivalSDKConfig {
@@ -575,6 +602,7 @@ export interface SaveSnapshot {
     stats: SurvivalStats;
     unlockedAchievements: [string, number][];
   };
+  timeline: TimelineEntry[];
   sdk: {
     dayCounter: number;
     hoursInCurrentDay: number;
