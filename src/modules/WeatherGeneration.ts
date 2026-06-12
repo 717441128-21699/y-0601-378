@@ -8,22 +8,105 @@ import {
   WeatherConfig,
   ExtremeWeatherWeights,
   SeasonWeights,
+  SeasonDef,
+  SeasonCalendar,
+  SeasonState,
 } from '../types';
 import { clamp, SeededRandom } from '../utils';
 
-const DEFAULT_SEASON_WEIGHTS: Record<string, SeasonWeights & { tempOffset: number }> = {
-  temperate: { tempOffset: 0, rainChance: 0.25, snowChance: 0.05, fogChance: 0.08, windyChance: 0.07 },
-  tropical: { tempOffset: 10, rainChance: 0.35, snowChance: 0, fogChance: 0.05, windyChance: 0.05 },
-  arctic: { tempOffset: -20, rainChance: 0.1, snowChance: 0.4, fogChance: 0.06, windyChance: 0.1 },
-  desert: { tempOffset: 15, rainChance: 0.05, snowChance: 0, fogChance: 0.03, windyChance: 0.12 },
+const DEFAULT_SEASON_PRESETS: Record<string, SeasonDef> = {
+  temperate: {
+    name: '温带',
+    durationDays: 30,
+    baseTemperature: 20,
+    temperatureAmplitude: 10,
+    nightTemperatureDrop: 5,
+    seasonWeights: { rainChance: 0.25, snowChance: 0.05, fogChance: 0.08, windyChance: 0.07 },
+    extremeWeatherChance: 0.1,
+    extremeWeatherWeights: { storm: 1, blizzard: 1, heatwave: 1, cold_wave: 1 },
+    extremeWeatherBlacklist: [],
+  },
+  tropical: {
+    name: '热带',
+    durationDays: 30,
+    baseTemperature: 30,
+    temperatureAmplitude: 6,
+    nightTemperatureDrop: 3,
+    seasonWeights: { rainChance: 0.35, snowChance: 0, fogChance: 0.05, windyChance: 0.05 },
+    extremeWeatherChance: 0.15,
+    extremeWeatherWeights: { storm: 2, blizzard: 0, heatwave: 1, cold_wave: 0 },
+    extremeWeatherBlacklist: ['blizzard', 'cold_wave'],
+  },
+  arctic: {
+    name: '寒带',
+    durationDays: 30,
+    baseTemperature: -10,
+    temperatureAmplitude: 8,
+    nightTemperatureDrop: 8,
+    seasonWeights: { rainChance: 0.1, snowChance: 0.4, fogChance: 0.06, windyChance: 0.1 },
+    extremeWeatherChance: 0.2,
+    extremeWeatherWeights: { storm: 1, blizzard: 3, heatwave: 0, cold_wave: 2 },
+    extremeWeatherBlacklist: ['heatwave'],
+  },
+  desert: {
+    name: '沙漠',
+    durationDays: 30,
+    baseTemperature: 35,
+    temperatureAmplitude: 15,
+    nightTemperatureDrop: 12,
+    seasonWeights: { rainChance: 0.05, snowChance: 0, fogChance: 0.03, windyChance: 0.12 },
+    extremeWeatherChance: 0.12,
+    extremeWeatherWeights: { storm: 1, blizzard: 0, heatwave: 3, cold_wave: 0 },
+    extremeWeatherBlacklist: ['blizzard', 'cold_wave'],
+  },
 };
 
-const DEFAULT_EXTREME_WEIGHTS: ExtremeWeatherWeights = {
-  storm: 1,
-  blizzard: 1,
-  heatwave: 1,
-  cold_wave: 1,
-};
+const DEFAULT_CALENDAR_SEASONS: SeasonDef[] = [
+  {
+    name: '春',
+    durationDays: 15,
+    baseTemperature: 15,
+    temperatureAmplitude: 8,
+    nightTemperatureDrop: 5,
+    seasonWeights: { rainChance: 0.3, snowChance: 0.02, fogChance: 0.1, windyChance: 0.1 },
+    extremeWeatherChance: 0.08,
+    extremeWeatherWeights: { storm: 2, blizzard: 0, heatwave: 0, cold_wave: 1 },
+    extremeWeatherBlacklist: ['blizzard', 'heatwave'],
+  },
+  {
+    name: '夏',
+    durationDays: 15,
+    baseTemperature: 30,
+    temperatureAmplitude: 6,
+    nightTemperatureDrop: 3,
+    seasonWeights: { rainChance: 0.2, snowChance: 0, fogChance: 0.03, windyChance: 0.05 },
+    extremeWeatherChance: 0.12,
+    extremeWeatherWeights: { storm: 1, blizzard: 0, heatwave: 2, cold_wave: 0 },
+    extremeWeatherBlacklist: ['blizzard', 'cold_wave'],
+  },
+  {
+    name: '秋',
+    durationDays: 15,
+    baseTemperature: 12,
+    temperatureAmplitude: 10,
+    nightTemperatureDrop: 7,
+    seasonWeights: { rainChance: 0.25, snowChance: 0.05, fogChance: 0.12, windyChance: 0.15 },
+    extremeWeatherChance: 0.1,
+    extremeWeatherWeights: { storm: 1, blizzard: 1, heatwave: 0, cold_wave: 1 },
+    extremeWeatherBlacklist: ['heatwave'],
+  },
+  {
+    name: '冬',
+    durationDays: 15,
+    baseTemperature: -5,
+    temperatureAmplitude: 6,
+    nightTemperatureDrop: 10,
+    seasonWeights: { rainChance: 0.08, snowChance: 0.4, fogChance: 0.06, windyChance: 0.12 },
+    extremeWeatherChance: 0.15,
+    extremeWeatherWeights: { storm: 1, blizzard: 3, heatwave: 0, cold_wave: 2 },
+    extremeWeatherBlacklist: ['heatwave'],
+  },
+];
 
 const DEFAULT_WEATHER_CONFIG: WeatherConfig = {
   dayLength: 16,
@@ -34,10 +117,15 @@ const DEFAULT_WEATHER_CONFIG: WeatherConfig = {
   extremeWeatherChance: 0.1,
   extremeWeatherMinDuration: 2,
   extremeWeatherMaxDuration: 8,
-  extremeWeatherWeights: { ...DEFAULT_EXTREME_WEIGHTS },
-  seasonWeights: { ...DEFAULT_SEASON_WEIGHTS.temperate },
+  extremeWeatherWeights: { storm: 1, blizzard: 1, heatwave: 1, cold_wave: 1 },
+  extremeWeatherBlacklist: [],
+  seasonWeights: { rainChance: 0.25, snowChance: 0.05, fogChance: 0.08, windyChance: 0.07 },
   seasonType: 'temperate',
   tempOffset: 0,
+  calendar: {
+    seasons: DEFAULT_CALENDAR_SEASONS,
+    startSeasonIndex: 0,
+  },
 };
 
 const EXTREME_WEATHER_TEMPLATES: Record<string, { name: string; description: string; effects: WeatherEffect[]; tipText: string }> = {
@@ -95,35 +183,66 @@ export class WeatherGeneration {
   private activeExtremeEvent: ExtremeWeatherEvent | null = null;
   private extremeEventRemaining: number = 0;
 
+  private calendar: SeasonCalendar;
+  private seasonState: SeasonState;
+  private totalDaysElapsed: number = 0;
+  private useCalendar: boolean;
+
   constructor(config: Partial<WeatherConfig>, rng: SeededRandom) {
-    const seasonDefaults = DEFAULT_SEASON_WEIGHTS[config.seasonType ?? 'temperate'];
+    const preset = DEFAULT_SEASON_PRESETS[config.seasonType ?? 'temperate'];
     const resolvedSeasonWeights: SeasonWeights = {
-      rainChance: config.seasonWeights?.rainChance ?? seasonDefaults.rainChance,
-      snowChance: config.seasonWeights?.snowChance ?? seasonDefaults.snowChance,
-      fogChance: config.seasonWeights?.fogChance ?? seasonDefaults.fogChance,
-      windyChance: config.seasonWeights?.windyChance ?? seasonDefaults.windyChance,
+      rainChance: config.seasonWeights?.rainChance ?? preset.seasonWeights.rainChance,
+      snowChance: config.seasonWeights?.snowChance ?? preset.seasonWeights.snowChance,
+      fogChance: config.seasonWeights?.fogChance ?? preset.seasonWeights.fogChance,
+      windyChance: config.seasonWeights?.windyChance ?? preset.seasonWeights.windyChance,
     };
 
     this.config = {
       ...DEFAULT_WEATHER_CONFIG,
       ...config,
       extremeWeatherWeights: {
-        ...DEFAULT_EXTREME_WEIGHTS,
+        ...DEFAULT_WEATHER_CONFIG.extremeWeatherWeights,
         ...(config.extremeWeatherWeights ?? {}),
       },
+      extremeWeatherBlacklist: config.extremeWeatherBlacklist ?? [],
       seasonWeights: resolvedSeasonWeights,
-      tempOffset: config.tempOffset ?? seasonDefaults.tempOffset,
+      tempOffset: config.tempOffset ?? 0,
     };
+
+    if (config.calendar && config.calendar.seasons.length > 0) {
+      this.calendar = config.calendar;
+      this.useCalendar = true;
+    } else if (config.seasonType && DEFAULT_SEASON_PRESETS[config.seasonType]) {
+      this.calendar = {
+        seasons: [DEFAULT_SEASON_PRESETS[config.seasonType]],
+        startSeasonIndex: 0,
+      };
+      this.useCalendar = false;
+    } else {
+      this.calendar = DEFAULT_WEATHER_CONFIG.calendar!;
+      this.useCalendar = true;
+    }
+
+    const startIdx = this.calendar.startSeasonIndex ?? 0;
+    const startSeason = this.calendar.seasons[startIdx] ?? this.calendar.seasons[0];
+    this.seasonState = {
+      currentSeason: startSeason,
+      currentSeasonIndex: startIdx,
+      dayInSeason: 0,
+      totalDaysElapsed: 0,
+    };
+
     this.rng = rng;
     this.currentWeather = {
       type: 'clear',
-      temperature: this.config.baseTemperature + this.config.tempOffset,
+      temperature: this.getEffectiveBaseTemp(),
       windSpeed: 5,
       visibility: 100,
       humidity: 50,
       severity: 0,
       dayPhase: 'morning',
       hour: 6,
+      season: startSeason.name,
     };
   }
 
@@ -132,17 +251,26 @@ export class WeatherGeneration {
     this.totalHoursElapsed += deltaHours;
 
     const dayTotal = this.config.dayLength + this.config.nightLength;
+    const daysAdvanced = Math.floor(this.totalHoursElapsed / dayTotal);
+    if (daysAdvanced > this.totalDaysElapsed) {
+      const newDays = daysAdvanced - this.totalDaysElapsed;
+      this.totalDaysElapsed = daysAdvanced;
+      this.advanceSeason(newDays);
+    }
+
     const hourOfDay = ((this.currentHour % dayTotal) + dayTotal) % dayTotal;
 
     this.currentWeather.dayPhase = this.getPhase(hourOfDay);
     this.currentWeather.hour = hourOfDay;
+    this.currentWeather.season = this.seasonState.currentSeason.name;
 
+    const season = this.seasonState.currentSeason;
     const tempCycle = Math.sin((hourOfDay / dayTotal) * Math.PI * 2 - Math.PI / 2);
-    let baseTemp = this.config.baseTemperature + tempCycle * this.config.temperatureAmplitude + this.config.tempOffset;
+    let baseTemp = season.baseTemperature + tempCycle * season.temperatureAmplitude + this.config.tempOffset;
 
     const isNight = hourOfDay >= this.config.dayLength;
     if (isNight) {
-      baseTemp -= this.config.nightTemperatureDrop;
+      baseTemp -= season.nightTemperatureDrop;
     }
 
     this.currentWeather.temperature = baseTemp;
@@ -174,12 +302,30 @@ export class WeatherGeneration {
     return { ...this.currentWeather };
   }
 
+  private advanceSeason(days: number): void {
+    this.seasonState.dayInSeason += days;
+    this.seasonState.totalDaysElapsed += days;
+
+    if (!this.useCalendar && this.calendar.seasons.length === 1) return;
+
+    while (this.seasonState.dayInSeason >= this.seasonState.currentSeason.durationDays) {
+      this.seasonState.dayInSeason -= this.seasonState.currentSeason.durationDays;
+      this.seasonState.currentSeasonIndex = (this.seasonState.currentSeasonIndex + 1) % this.calendar.seasons.length;
+      this.seasonState.currentSeason = this.calendar.seasons[this.seasonState.currentSeasonIndex];
+    }
+  }
+
   private rollWeatherType(): void {
-    const sw = this.config.seasonWeights;
-    const extremeChance = this.config.extremeWeatherChance;
+    const season = this.seasonState.currentSeason;
+    const sw = season.seasonWeights;
+    const extremeChance = season.extremeWeatherChance;
+    const blacklist = new Set<WeatherType>([
+      ...this.config.extremeWeatherBlacklist,
+      ...season.extremeWeatherBlacklist,
+    ]);
 
     if (extremeChance > 0 && this.rng.chance(extremeChance)) {
-      const type = this.pickExtremeType();
+      const type = this.pickExtremeType(season, blacklist);
       if (type) {
         this.currentWeather.type = type;
         this.triggerExtremeWeather(type);
@@ -191,15 +337,15 @@ export class WeatherGeneration {
     let cumulative = 0;
 
     cumulative += sw.snowChance;
-    if (roll < cumulative && this.currentWeather.temperature < 2) {
-      this.currentWeather.type = this.rng.pick<WeatherType>(['snow']);
+    if (roll < cumulative && this.currentWeather.temperature < 2 && !blacklist.has('snow')) {
+      this.currentWeather.type = 'snow';
       this.currentWeather.humidity = this.rng.nextInt(60, 85);
       this.currentWeather.windSpeed = this.rng.nextInt(5, 20);
       return;
     }
 
     cumulative += sw.rainChance;
-    if (roll < cumulative) {
+    if (roll < cumulative && !blacklist.has('rain')) {
       this.currentWeather.type = this.rng.pick<WeatherType>(['rain', 'heavy_rain']);
       this.currentWeather.humidity = this.rng.nextInt(70, 95);
       this.currentWeather.windSpeed = this.rng.nextInt(5, 25);
@@ -207,7 +353,7 @@ export class WeatherGeneration {
     }
 
     cumulative += sw.fogChance;
-    if (roll < cumulative) {
+    if (roll < cumulative && !blacklist.has('fog')) {
       this.currentWeather.type = 'fog';
       this.currentWeather.visibility = this.rng.nextInt(20, 50);
       this.currentWeather.humidity = this.rng.nextInt(80, 95);
@@ -216,7 +362,7 @@ export class WeatherGeneration {
     }
 
     cumulative += sw.windyChance;
-    if (roll < cumulative) {
+    if (roll < cumulative && !blacklist.has('windy')) {
       this.currentWeather.type = 'windy';
       this.currentWeather.windSpeed = this.rng.nextInt(30, 60);
       this.currentWeather.humidity = this.rng.nextInt(20, 50);
@@ -228,14 +374,16 @@ export class WeatherGeneration {
     this.currentWeather.humidity = this.rng.nextInt(30, 60);
   }
 
-  private pickExtremeType(): WeatherType | null {
-    const weights = this.config.extremeWeatherWeights;
+  private pickExtremeType(season: SeasonDef, blacklist: Set<WeatherType>): WeatherType | null {
+    const weights = season.extremeWeatherWeights;
     const entries: { type: WeatherType; weight: number }[] = ([
       { type: 'storm' as WeatherType, weight: weights.storm ?? 0 },
       { type: 'blizzard' as WeatherType, weight: weights.blizzard ?? 0 },
       { type: 'heatwave' as WeatherType, weight: weights.heatwave ?? 0 },
       { type: 'cold_wave' as WeatherType, weight: weights.cold_wave ?? 0 },
-    ] as const).filter((e): e is { type: WeatherType; weight: number } => e.weight > 0);
+    ] as const).filter(
+      (e): e is { type: WeatherType; weight: number } => e.weight > 0 && !blacklist.has(e.type)
+    );
 
     if (entries.length === 0) return null;
 
@@ -251,15 +399,7 @@ export class WeatherGeneration {
   triggerExtremeWeather(type: WeatherType): ExtremeWeatherEvent {
     const template = EXTREME_WEATHER_TEMPLATES[type];
     if (!template) {
-      return {
-        type,
-        name: type,
-        description: '',
-        duration: 0,
-        intensity: 0,
-        effects: [],
-        tipText: '',
-      };
+      return { type, name: type, description: '', duration: 0, intensity: 0, effects: [], tipText: '' };
     }
 
     const intensity = this.rng.nextFloat(0.5, 1.0);
@@ -284,20 +424,56 @@ export class WeatherGeneration {
     return { ...event };
   }
 
+  getSeasonState(): SeasonState {
+    return {
+      currentSeason: { ...this.seasonState.currentSeason },
+      currentSeasonIndex: this.seasonState.currentSeasonIndex,
+      dayInSeason: this.seasonState.dayInSeason,
+      totalDaysElapsed: this.seasonState.totalDaysElapsed,
+    };
+  }
+
+  setCalendar(calendar: SeasonCalendar): void {
+    this.calendar = calendar;
+    this.useCalendar = calendar.seasons.length > 1;
+    const startIdx = calendar.startSeasonIndex ?? 0;
+    this.seasonState = {
+      currentSeason: calendar.seasons[startIdx] ?? calendar.seasons[0],
+      currentSeasonIndex: startIdx,
+      dayInSeason: 0,
+      totalDaysElapsed: this.seasonState.totalDaysElapsed,
+    };
+  }
+
+  getCalendar(): SeasonCalendar {
+    return {
+      seasons: this.calendar.seasons.map((s) => ({ ...s })),
+      startSeasonIndex: this.calendar.startSeasonIndex,
+    };
+  }
+
+  setExtremeWeatherBlacklist(blacklist: WeatherType[]): void {
+    this.config.extremeWeatherBlacklist = [...blacklist];
+  }
+
+  getExtremeWeatherBlacklist(): WeatherType[] {
+    return [...this.config.extremeWeatherBlacklist];
+  }
+
   updateConfig(partial: Partial<WeatherConfig>): void {
     if (partial.extremeWeatherWeights) {
-      this.config.extremeWeatherWeights = {
-        ...this.config.extremeWeatherWeights,
-        ...partial.extremeWeatherWeights,
-      };
+      this.config.extremeWeatherWeights = { ...this.config.extremeWeatherWeights, ...partial.extremeWeatherWeights };
     }
     if (partial.seasonWeights) {
-      this.config.seasonWeights = {
-        ...this.config.seasonWeights,
-        ...partial.seasonWeights,
-      };
+      this.config.seasonWeights = { ...this.config.seasonWeights, ...partial.seasonWeights };
     }
-    const { extremeWeatherWeights: _ew, seasonWeights: _sw, ...rest } = partial;
+    if (partial.extremeWeatherBlacklist) {
+      this.config.extremeWeatherBlacklist = [...partial.extremeWeatherBlacklist];
+    }
+    if (partial.calendar) {
+      this.setCalendar(partial.calendar);
+    }
+    const { extremeWeatherWeights: _ew, seasonWeights: _sw, extremeWeatherBlacklist: _eb, calendar: _cal, ...rest } = partial;
     Object.assign(this.config, rest);
   }
 
@@ -340,6 +516,10 @@ export class WeatherGeneration {
 
   setHour(hour: number): void {
     this.currentHour = hour;
+  }
+
+  private getEffectiveBaseTemp(): number {
+    return this.seasonState.currentSeason.baseTemperature + this.config.tempOffset;
   }
 
   private getPhase(hour: number): DayPhase {

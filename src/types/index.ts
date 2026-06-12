@@ -99,6 +99,7 @@ export interface WeatherState {
   severity: number;
   dayPhase: DayPhase;
   hour: number;
+  season?: string;
 }
 
 export interface DayNightCycle {
@@ -139,6 +140,30 @@ export interface SeasonWeights {
   windyChance: number;
 }
 
+export interface SeasonDef {
+  name: string;
+  durationDays: number;
+  baseTemperature: number;
+  temperatureAmplitude: number;
+  nightTemperatureDrop: number;
+  seasonWeights: SeasonWeights;
+  extremeWeatherChance: number;
+  extremeWeatherWeights: ExtremeWeatherWeights;
+  extremeWeatherBlacklist: WeatherType[];
+}
+
+export interface SeasonCalendar {
+  seasons: SeasonDef[];
+  startSeasonIndex?: number;
+}
+
+export interface SeasonState {
+  currentSeason: SeasonDef;
+  currentSeasonIndex: number;
+  dayInSeason: number;
+  totalDaysElapsed: number;
+}
+
 export interface WeatherConfig {
   dayLength: number;
   nightLength: number;
@@ -149,9 +174,11 @@ export interface WeatherConfig {
   extremeWeatherMinDuration: number;
   extremeWeatherMaxDuration: number;
   extremeWeatherWeights: ExtremeWeatherWeights;
+  extremeWeatherBlacklist: WeatherType[];
   seasonWeights: SeasonWeights;
   seasonType: 'temperate' | 'tropical' | 'arctic' | 'desert';
   tempOffset: number;
+  calendar?: SeasonCalendar;
 }
 
 export interface GatherSource {
@@ -178,12 +205,23 @@ export interface GatherResult {
   overflowItems: GatheredItem[];
   exhausted: boolean;
   tipText: string;
+  newAchievements?: AchievementDef[];
 }
 
 export interface GatheredItem {
   itemId: string;
   name: string;
   quantity: number;
+}
+
+export interface GatherPreview {
+  canGather: boolean;
+  reason: string;
+  potentialDrops: { itemId: string; name: string; minQty: number; maxQty: number; chance: number }[];
+  freeSlots: number;
+  estimatedMaxItems: number;
+  potentialOverflow: boolean;
+  tipText: string;
 }
 
 export interface RecipeDef {
@@ -233,6 +271,26 @@ export interface CraftResult {
   inventoryFull: boolean;
   itemsActuallyAdded: number;
   itemsOverflow: number;
+  tipText: string;
+  newAchievements?: AchievementDef[];
+}
+
+export interface CraftPreview {
+  canCraft: boolean;
+  materialsToConsume: RecipeMaterial[];
+  toolsRequired: string[];
+  skillRequired: number;
+  currentSkill: number;
+  facilityRequired: string | null;
+  facilityPresent: boolean;
+  resultItem: { itemId: string; name: string; quantity: number };
+  freeSlots: number;
+  slotsNeeded: number;
+  willOverflow: boolean;
+  overflowCount: number;
+  actualAddable: number;
+  unlockStatus: 'unlocked' | 'locked' | 'no_condition';
+  blockReasons: string[];
   tipText: string;
 }
 
@@ -316,6 +374,7 @@ export interface EventResult {
   chosenChoice?: string;
   effects: EventEffect[];
   tipText: string;
+  newAchievements?: AchievementDef[];
 }
 
 export interface InjuryResult {
@@ -367,11 +426,13 @@ export interface RescueResult {
   tipText: string;
 }
 
+export type AchievementCategory = 'survival' | 'crafting' | 'combat' | 'exploration' | 'social';
+
 export interface AchievementDef {
   id: string;
   name: string;
   description: string;
-  category: 'survival' | 'crafting' | 'combat' | 'exploration' | 'social';
+  category: AchievementCategory;
   condition: AchievementCondition;
   reward?: AchievementReward;
   tipText: string;
@@ -390,11 +451,26 @@ export interface AchievementReward {
 export interface AchievementProgress {
   id: string;
   name: string;
+  category: AchievementCategory;
   current: number;
   target: number;
   percent: number;
   unlocked: boolean;
   unlockedAt?: number;
+}
+
+export interface AchievementCategoryPanel {
+  category: AchievementCategory;
+  achievements: AchievementProgress[];
+  unlocked: number;
+  total: number;
+  percent: number;
+}
+
+export interface AchievementDashboard {
+  totalProgress: { unlocked: number; total: number; percent: number };
+  categoryPanels: AchievementCategoryPanel[];
+  recentlyUnlocked: RecentlyUnlockedAchievement[];
 }
 
 export interface RecentlyUnlockedAchievement {
@@ -424,10 +500,20 @@ export interface TipTextContext {
   inventory?: Inventory;
 }
 
+export interface ExternalCallbacks {
+  getSkillLevel?: () => number;
+  setSkillLevel?: (level: number) => void;
+  hasFacility?: (facilityType: string) => boolean;
+  getFacilityLevel?: (facilityType: string) => number;
+  getCampWarmthBonus?: () => number;
+  getCampSafetyBonus?: () => number;
+  getInventoryCapacity?: () => number;
+}
+
 export interface SurvivalSDKConfig {
   vitals?: Partial<VitalsConfig>;
   weather?: Partial<WeatherConfig>;
   inventoryCapacity?: number;
   randomSeed?: number;
-  getSkillLevel?: () => number;
+  externalCallbacks?: ExternalCallbacks;
 }

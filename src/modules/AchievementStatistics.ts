@@ -1,8 +1,11 @@
 import {
   AchievementDef,
+  AchievementCategory,
   AchievementCondition,
   SurvivalStats,
   AchievementProgress,
+  AchievementCategoryPanel,
+  AchievementDashboard,
   RecentlyUnlockedAchievement,
   TipTextContext,
   WeatherType,
@@ -21,6 +24,8 @@ const DEFAULT_TIP_TEMPLATES: Record<string, string> = {
   mid_days: '你已经撑过最困难的阶段，考虑升级营地设施。',
   late_days: '你是老手了！帮助需要的人，也许会有意外收获。',
 };
+
+const ALL_CATEGORIES: AchievementCategory[] = ['survival', 'crafting', 'combat', 'exploration', 'social'];
 
 export class AchievementStatistics {
   private achievements: Map<string, AchievementDef> = new Map();
@@ -150,41 +155,40 @@ export class AchievementStatistics {
   }
 
   getAchievementProgress(): AchievementProgress[] {
-    return Array.from(this.achievements.values()).map((a) => {
-      const current = this.getCurrentProgress(a.condition);
-      const target = a.condition.value;
-      const percent = Math.min(100, Math.round((current / target) * 100));
-      const unlockedAt = this.unlockedAchievements.get(a.id);
-
-      return {
-        id: a.id,
-        name: a.name,
-        current,
-        target,
-        percent,
-        unlocked: this.unlockedAchievements.has(a.id),
-        unlockedAt,
-      };
-    });
+    return Array.from(this.achievements.values()).map((a) => this.buildProgress(a));
   }
 
   getAchievementProgressById(id: string): AchievementProgress | null {
     const achievement = this.achievements.get(id);
     if (!achievement) return null;
+    return this.buildProgress(achievement);
+  }
 
-    const current = this.getCurrentProgress(achievement.condition);
-    const target = achievement.condition.value;
-    const percent = Math.min(100, Math.round((current / target) * 100));
-    const unlockedAt = this.unlockedAchievements.get(id);
+  getAchievementProgressByCategory(category: AchievementCategory): AchievementCategoryPanel {
+    const categoryAchievements = Array.from(this.achievements.values()).filter((a) => a.category === category);
+    const progressItems = categoryAchievements.map((a) => this.buildProgress(a));
+    const unlocked = progressItems.filter((p) => p.unlocked).length;
+    const total = progressItems.length;
+    const percent = total > 0 ? Math.round((unlocked / total) * 100) : 0;
 
     return {
-      id: achievement.id,
-      name: achievement.name,
-      current,
-      target,
+      category,
+      achievements: progressItems,
+      unlocked,
+      total,
       percent,
-      unlocked: this.unlockedAchievements.has(id),
-      unlockedAt,
+    };
+  }
+
+  getAllCategoryPanels(): AchievementCategoryPanel[] {
+    return ALL_CATEGORIES.map((cat) => this.getAchievementProgressByCategory(cat));
+  }
+
+  getDashboard(): AchievementDashboard {
+    return {
+      totalProgress: this.getTotalProgress(),
+      categoryPanels: this.getAllCategoryPanels(),
+      recentlyUnlocked: this.getRecentlyUnlocked(5),
     };
   }
 
@@ -251,6 +255,24 @@ export class AchievementStatistics {
       longestSurvival: this.stats.longestSurvival,
       achievementsUnlocked: [],
       recentlyUnlocked: [],
+    };
+  }
+
+  private buildProgress(a: AchievementDef): AchievementProgress {
+    const current = this.getCurrentProgress(a.condition);
+    const target = a.condition.value;
+    const percent = Math.min(100, Math.round((current / target) * 100));
+    const unlockedAt = this.unlockedAchievements.get(a.id);
+
+    return {
+      id: a.id,
+      name: a.name,
+      category: a.category,
+      current,
+      target,
+      percent,
+      unlocked: this.unlockedAchievements.has(a.id),
+      unlockedAt,
     };
   }
 
