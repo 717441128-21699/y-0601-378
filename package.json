@@ -1,0 +1,15 @@
+{
+  "name": "survival-game-sdk",
+  "version": "1.0.0",
+  "description": "生存类游戏事件 SDK —— 饥饿、天气与营地管理",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
