@@ -125,13 +125,33 @@ export interface WeatherEffect {
   value: number;
 }
 
+export interface ExtremeWeatherWeights {
+  storm?: number;
+  blizzard?: number;
+  heatwave?: number;
+  cold_wave?: number;
+}
+
+export interface SeasonWeights {
+  rainChance: number;
+  snowChance: number;
+  fogChance: number;
+  windyChance: number;
+}
+
 export interface WeatherConfig {
   dayLength: number;
   nightLength: number;
   baseTemperature: number;
   temperatureAmplitude: number;
+  nightTemperatureDrop: number;
   extremeWeatherChance: number;
+  extremeWeatherMinDuration: number;
+  extremeWeatherMaxDuration: number;
+  extremeWeatherWeights: ExtremeWeatherWeights;
+  seasonWeights: SeasonWeights;
   seasonType: 'temperate' | 'tropical' | 'arctic' | 'desert';
+  tempOffset: number;
 }
 
 export interface GatherSource {
@@ -154,6 +174,8 @@ export interface GatherDrop {
 export interface GatherResult {
   sourceId: string;
   items: GatheredItem[];
+  addedToInventory: GatheredItem[];
+  overflowItems: GatheredItem[];
   exhausted: boolean;
   tipText: string;
 }
@@ -191,10 +213,16 @@ export interface RecipeResult {
 
 export interface CraftCheckResult {
   canCraft: boolean;
+  unlocked: boolean;
   missingMaterials: RecipeMaterial[];
   missingTools: string[];
   missingSkill: boolean;
+  currentSkill?: number;
+  requiredSkill?: number;
   missingFacility: boolean;
+  requiredFacilityName?: string;
+  inventoryFull: boolean;
+  inventoryFreeSlots: number;
   tipText: string;
 }
 
@@ -202,6 +230,9 @@ export interface CraftResult {
   success: boolean;
   resultItem?: InventoryItem;
   materialsConsumed: boolean;
+  inventoryFull: boolean;
+  itemsActuallyAdded: number;
+  itemsOverflow: number;
   tipText: string;
 }
 
@@ -347,7 +378,7 @@ export interface AchievementDef {
 }
 
 export interface AchievementCondition {
-  type: 'survival_days' | 'craft_count' | 'kill_count' | 'gather_count' | 'explore_count' | 'weather_survived' | 'facility_level' | 'event_resolved';
+  type: 'survival_days' | 'craft_count' | 'kill_count' | 'gather_count' | 'explore_count' | 'weather_survived' | 'facility_level' | 'facility_upgrade' | 'event_resolved';
   value: number;
 }
 
@@ -356,16 +387,33 @@ export interface AchievementReward {
   value: string | number;
 }
 
+export interface AchievementProgress {
+  id: string;
+  name: string;
+  current: number;
+  target: number;
+  percent: number;
+  unlocked: boolean;
+  unlockedAt?: number;
+}
+
+export interface RecentlyUnlockedAchievement {
+  achievement: AchievementDef;
+  unlockedAt: number;
+}
+
 export interface SurvivalStats {
   daysSurvived: number;
   totalGatherCount: number;
   totalCraftCount: number;
   totalEventsResolved: number;
+  totalFacilityUpgrades: number;
   weatherSurvived: Partial<Record<WeatherType, number>>;
   deathCount: number;
   causeOfDeath: string[];
   longestSurvival: number;
   achievementsUnlocked: string[];
+  recentlyUnlocked: RecentlyUnlockedAchievement[];
 }
 
 export interface TipTextContext {
@@ -381,4 +429,5 @@ export interface SurvivalSDKConfig {
   weather?: Partial<WeatherConfig>;
   inventoryCapacity?: number;
   randomSeed?: number;
+  getSkillLevel?: () => number;
 }

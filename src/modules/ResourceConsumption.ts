@@ -56,6 +56,16 @@ export class ResourceConsumption {
   addFoodItem(foodId: string, quantity: number): InventoryItem | null {
     const food = this.foods.get(foodId);
     if (!food) return null;
+
+    const existing = this.inventory.items.find(
+      (i) => i.defId === foodId && i.currentSpoilage !== undefined && i.currentSpoilage < 100
+    );
+
+    if (existing) {
+      existing.quantity += quantity;
+      return { ...existing };
+    }
+
     if (this.inventory.items.length >= this.inventory.capacity) return null;
 
     const item: InventoryItem = {
@@ -91,6 +101,47 @@ export class ResourceConsumption {
     const tool = this.tools.get(defId);
     if (tool) return this.addToolItem(defId);
     return null;
+  }
+
+  addItemWithOverflow(defId: string, quantity: number): { added: InventoryItem[]; overflowCount: number } {
+    const food = this.foods.get(defId);
+    const tool = this.tools.get(defId);
+
+    if (!food && !tool) return { added: [], overflowCount: quantity };
+
+    if (food) {
+      const existing = this.inventory.items.find(
+        (i) => i.defId === defId && i.currentSpoilage !== undefined && i.currentSpoilage < 100
+      );
+      if (existing) {
+        existing.quantity += quantity;
+        return { added: [{ ...existing }], overflowCount: 0 };
+      }
+
+      if (this.inventory.items.length < this.inventory.capacity) {
+        const item = this.addFoodItem(defId, quantity);
+        return item ? { added: [item], overflowCount: 0 } : { added: [], overflowCount: quantity };
+      }
+
+      return { added: [], overflowCount: quantity };
+    }
+
+    if (tool) {
+      const added: InventoryItem[] = [];
+      let remaining = quantity;
+      while (remaining > 0 && this.inventory.items.length < this.inventory.capacity) {
+        const item = this.addToolItem(defId);
+        if (item) {
+          added.push(item);
+          remaining--;
+        } else {
+          break;
+        }
+      }
+      return { added, overflowCount: remaining };
+    }
+
+    return { added: [], overflowCount: quantity };
   }
 
   removeItem(instanceId: string): InventoryItem | null {
@@ -222,6 +273,9 @@ export class ResourceConsumption {
   }
 
   consumeItemByDefId(defId: string, quantity: number): boolean {
+    const available = this.getItemCount(defId);
+    if (available < quantity) return false;
+
     let remaining = quantity;
     const items = this.inventory.items.filter((i) => i.defId === defId);
 
@@ -257,7 +311,15 @@ export class ResourceConsumption {
     return this.inventory.items.length;
   }
 
-  getInventoryFree(): number {
+  getInventoryFreeSlots(): number {
     return this.inventory.capacity - this.inventory.items.length;
+  }
+
+  isFood(defId: string): boolean {
+    return this.foods.has(defId);
+  }
+
+  isTool(defId: string): boolean {
+    return this.tools.has(defId);
   }
 }

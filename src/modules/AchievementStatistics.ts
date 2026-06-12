@@ -1,8 +1,9 @@
 import {
   AchievementDef,
   AchievementCondition,
-  AchievementReward,
   SurvivalStats,
+  AchievementProgress,
+  RecentlyUnlockedAchievement,
   TipTextContext,
   WeatherType,
 } from '../types';
@@ -23,7 +24,7 @@ const DEFAULT_TIP_TEMPLATES: Record<string, string> = {
 
 export class AchievementStatistics {
   private achievements: Map<string, AchievementDef> = new Map();
-  private unlockedAchievements: Set<string> = new Set();
+  private unlockedAchievements: Map<string, number> = new Map();
   private stats: SurvivalStats;
   private customTipTemplates: Map<string, string> = new Map();
 
@@ -33,11 +34,13 @@ export class AchievementStatistics {
       totalGatherCount: 0,
       totalCraftCount: 0,
       totalEventsResolved: 0,
+      totalFacilityUpgrades: 0,
       weatherSurvived: {},
       deathCount: 0,
       causeOfDeath: [],
       longestSurvival: 0,
       achievementsUnlocked: [],
+      recentlyUnlocked: [],
     };
   }
 
@@ -57,16 +60,24 @@ export class AchievementStatistics {
     return this.checkMilestones();
   }
 
-  recordGather(): void {
-    this.stats.totalGatherCount += 1;
+  recordGather(count: number = 1): AchievementDef[] {
+    this.stats.totalGatherCount += count;
+    return this.checkMilestones();
   }
 
-  recordCraft(): void {
-    this.stats.totalCraftCount += 1;
+  recordCraft(count: number = 1): AchievementDef[] {
+    this.stats.totalCraftCount += count;
+    return this.checkMilestones();
   }
 
-  recordEventResolved(): void {
+  recordEventResolved(): AchievementDef[] {
     this.stats.totalEventsResolved += 1;
+    return this.checkMilestones();
+  }
+
+  recordFacilityUpgrade(): AchievementDef[] {
+    this.stats.totalFacilityUpgrades += 1;
+    return this.checkMilestones();
   }
 
   recordWeatherSurvived(weatherType: WeatherType): void {
@@ -80,13 +91,22 @@ export class AchievementStatistics {
 
   checkMilestones(): AchievementDef[] {
     const newlyUnlocked: AchievementDef[] = [];
+    const now = Date.now();
 
     for (const [id, achievement] of this.achievements) {
       if (this.unlockedAchievements.has(id)) continue;
 
       if (this.evaluateCondition(achievement.condition)) {
-        this.unlockedAchievements.add(id);
+        this.unlockedAchievements.set(id, now);
         this.stats.achievementsUnlocked.push(id);
+        const recentEntry: RecentlyUnlockedAchievement = {
+          achievement: { ...achievement },
+          unlockedAt: now,
+        };
+        this.stats.recentlyUnlocked.push(recentEntry);
+        if (this.stats.recentlyUnlocked.length > 20) {
+          this.stats.recentlyUnlocked = this.stats.recentlyUnlocked.slice(-20);
+        }
         newlyUnlocked.push({ ...achievement });
       }
     }
@@ -99,7 +119,16 @@ export class AchievementStatistics {
   }
 
   getStatistics(): SurvivalStats {
-    return { ...this.stats, weatherSurvived: { ...this.stats.weatherSurvived } };
+    return {
+      ...this.stats,
+      weatherSurvived: { ...this.stats.weatherSurvived },
+      causeOfDeath: [...this.stats.causeOfDeath],
+      achievementsUnlocked: [...this.stats.achievementsUnlocked],
+      recentlyUnlocked: this.stats.recentlyUnlocked.map((r) => ({
+        achievement: { ...r.achievement },
+        unlockedAt: r.unlockedAt,
+      })),
+    };
   }
 
   getUnlockedAchievements(): AchievementDef[] {
@@ -114,6 +143,56 @@ export class AchievementStatistics {
 
   isAchievementUnlocked(id: string): boolean {
     return this.unlockedAchievements.has(id);
+  }
+
+  getRecentlyUnlocked(limit: number = 5): RecentlyUnlockedAchievement[] {
+    return this.stats.recentlyUnlocked.slice(-limit).reverse();
+  }
+
+  getAchievementProgress(): AchievementProgress[] {
+    return Array.from(this.achievements.values()).map((a) => {
+      const current = this.getCurrentProgress(a.condition);
+      const target = a.condition.value;
+      const percent = Math.min(100, Math.round((current / target) * 100));
+      const unlockedAt = this.unlockedAchievements.get(a.id);
+
+      return {
+        id: a.id,
+        name: a.name,
+        current,
+        target,
+        percent,
+        unlocked: this.unlockedAchievements.has(a.id),
+        unlockedAt,
+      };
+    });
+  }
+
+  getAchievementProgressById(id: string): AchievementProgress | null {
+    const achievement = this.achievements.get(id);
+    if (!achievement) return null;
+
+    const current = this.getCurrentProgress(achievement.condition);
+    const target = achievement.condition.value;
+    const percent = Math.min(100, Math.round((current / target) * 100));
+    const unlockedAt = this.unlockedAchievements.get(id);
+
+    return {
+      id: achievement.id,
+      name: achievement.name,
+      current,
+      target,
+      percent,
+      unlocked: this.unlockedAchievements.has(id),
+      unlockedAt,
+    };
+  }
+
+  getTotalProgress(): { unlocked: number; total: number; percent: number } {
+    const total = this.achievements.size;
+    const unlocked = this.unlockedAchievements.size;
+    const percent = total > 0 ? Math.round((unlocked / total) * 100) : 0;
+    return { unlocked, total, percent };
   }
 
   getTipText(context: TipTextContext): string {
@@ -160,18 +239,38 @@ export class AchievementStatistics {
   }
 
   resetStats(): void {
-    const keepAchievements = [...this.stats.achievementsUnlocked];
     this.stats = {
       daysSurvived: 0,
       totalGatherCount: 0,
       totalCraftCount: 0,
       totalEventsResolved: 0,
+      totalFacilityUpgrades: 0,
       weatherSurvived: {},
       deathCount: 0,
       causeOfDeath: [],
       longestSurvival: this.stats.longestSurvival,
-      achievementsUnlocked: keepAchievements,
+      achievementsUnlocked: [],
+      recentlyUnlocked: [],
     };
+  }
+
+  private getCurrentProgress(condition: AchievementCondition): number {
+    switch (condition.type) {
+      case 'survival_days':
+        return this.stats.daysSurvived;
+      case 'craft_count':
+        return this.stats.totalCraftCount;
+      case 'gather_count':
+        return this.stats.totalGatherCount;
+      case 'event_resolved':
+        return this.stats.totalEventsResolved;
+      case 'facility_upgrade':
+        return this.stats.totalFacilityUpgrades;
+      case 'weather_survived':
+        return Object.values(this.stats.weatherSurvived).reduce((s, v) => s + v, 0);
+      default:
+        return 0;
+    }
   }
 
   private evaluateCondition(condition: AchievementCondition): boolean {
@@ -184,6 +283,8 @@ export class AchievementStatistics {
         return this.stats.totalGatherCount >= condition.value;
       case 'event_resolved':
         return this.stats.totalEventsResolved >= condition.value;
+      case 'facility_upgrade':
+        return this.stats.totalFacilityUpgrades >= condition.value;
       case 'weather_survived':
         return Object.values(this.stats.weatherSurvived).some((v) => v >= condition.value);
       default:

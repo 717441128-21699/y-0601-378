@@ -1,7 +1,7 @@
 import { CharacterStatus } from './modules/CharacterStatus';
 import { ResourceConsumption } from './modules/ResourceConsumption';
 import { WeatherGeneration } from './modules/WeatherGeneration';
-import { CraftingRecipe } from './modules/CraftingRecipe';
+import { CraftingRecipe, CraftingCallbacks } from './modules/CraftingRecipe';
 import { CampFacility } from './modules/CampFacility';
 import { EventDrawing } from './modules/EventDrawing';
 import { AchievementStatistics } from './modules/AchievementStatistics';
@@ -41,13 +41,16 @@ import {
   RescueResult,
   EventSeverity,
   AchievementDef,
+  AchievementProgress,
   SurvivalStats,
   TipTextContext,
   FoodCategory,
   RecipeMaterial,
+  AchievementCondition,
 } from './types';
 
 export * from './types';
+export { CraftingCallbacks } from './modules/CraftingRecipe';
 
 export class SurvivalSDK {
   readonly character: CharacterStatus;
@@ -62,6 +65,7 @@ export class SurvivalSDK {
   private config: SurvivalSDKConfig;
   private _dayCounter: number = 0;
   private _hoursInCurrentDay: number = 0;
+  private _skillLevel: number = 1;
 
   constructor(config: SurvivalSDKConfig = {}) {
     this.config = config;
@@ -70,15 +74,80 @@ export class SurvivalSDK {
     this.character = new CharacterStatus(config.vitals);
     this.resource = new ResourceConsumption(config.inventoryCapacity ?? 20, this.rng);
     this.weather = new WeatherGeneration(config.weather ?? {}, this.rng);
-    this.crafting = new CraftingRecipe(this.rng, {
-      getItemCount: (id) => this.resource.getItemCount(id),
-      consumeItemByDefId: (id, qty) => this.resource.consumeItemByDefId(id, qty),
-      hasTool: (id) => this.resource.hasItem(id),
-      addCraftedItem: (id, qty) => this.resource.addItem(id, qty),
-    });
+
+    const self = this;
+    const callbacks: CraftingCallbacks = {
+      getItemCount: (id) => self.resource.getItemCount(id),
+      consumeItemByDefId: (id, qty) => self.resource.consumeItemByDefId(id, qty),
+      hasTool: (id) => self.resource.hasItem(id),
+      addItem: (id, qty) => self.resource.addItem(id, qty),
+      addItemWithOverflow: (id, qty) => self.resource.addItemWithOverflow(id, qty),
+      getSkillLevel: () => self._skillLevel,
+      hasFacility: (type) => self.camp.hasFacilityOfType(type as FacilityType),
+      getFacilityName: (type) => {
+        const facilities = self.camp.getFacilitiesByType(type as FacilityType);
+        return facilities.length > 0 ? facilities[0].name : null;
+      },
+      getInventoryFreeSlots: () => self.resource.getInventoryFreeSlots(),
+    };
+    this.crafting = new CraftingRecipe(this.rng, callbacks);
+
     this.camp = new CampFacility(this.rng);
     this.event = new EventDrawing(this.rng);
     this.achievement = new AchievementStatistics();
+  }
+
+  setSkillLevel(level: number): void {
+    this._skillLevel = Math.max(1, level);
+  }
+
+  getSkillLevel(): number {
+    return this._skillLevel;
+  }
+
+  craft(recipeId: string): CraftResult {
+    const result = this.crafting.craft(recipeId);
+    if (result.success) {
+      this.achievement.recordCraft(result.itemsActuallyAdded);
+    }
+    return result;
+  }
+
+  gather(sourceId: string, toolBonus: number = 0): GatherResult {
+    const result = this.crafting.gather(sourceId, toolBonus);
+    if (result.addedToInventory.length > 0) {
+      const totalItems = result.addedToInventory.reduce((s, i) => s + i.quantity, 0);
+      this.achievement.recordGather(totalItems);
+    }
+    return result;
+  }
+
+  drawEvent(
+    context: {
+      survivalDays: number;
+      vitals?: Vitals;
+      weather?: WeatherState;
+      hasItem?: (id: string) => boolean;
+      facilityLevel?: (id: string) => number;
+    },
+    typeFilter?: SurvivalEventType
+  ): EventResult | null {
+    const result = this.event.drawEvent(context, typeFilter);
+    if (result && result.triggered) {
+      this.achievement.recordEventResolved();
+    }
+    return result;
+  }
+
+  upgradeFacility(
+    facilityId: string,
+    consumeMaterials: (mats: RecipeMaterial[]) => boolean
+  ): { success: boolean; facility?: FacilityDef; tipText: string } {
+    const result = this.camp.upgradeFacility(facilityId, consumeMaterials);
+    if (result.success) {
+      this.achievement.recordFacilityUpgrade();
+    }
+    return result;
   }
 
   tick(deltaHours: number = 1): {
@@ -111,7 +180,7 @@ export class SurvivalSDK {
       this.achievement.recordWeatherSurvived(currentWeather.type);
     }
 
-    const newAchievements = dayAdvanced ? this.achievement.checkMilestones() : [];
+    const newAchievements = this.achievement.checkMilestones();
 
     if (!this.character.isAlive()) {
       const cause = this.character.getCauseOfDeath();
@@ -147,9 +216,11 @@ export class SurvivalSDK {
     dayNight: DayNightCycle;
     inventory: Inventory;
     survivalDays: number;
+    skillLevel: number;
     isAlive: boolean;
     campFacilities: FacilityDef[];
     activeExtremeEvent: ExtremeWeatherEvent | null;
+    achievementProgress: { unlocked: number; total: number; percent: number };
   } {
     return {
       vitals: this.character.getVitals(),
@@ -157,16 +228,31 @@ export class SurvivalSDK {
       dayNight: this.weather.getDayNightCycle(),
       inventory: this.resource.getInventory(),
       survivalDays: this._dayCounter,
+      skillLevel: this._skillLevel,
       isAlive: this.character.isAlive(),
       campFacilities: this.camp.getFacilities(),
       activeExtremeEvent: this.weather.getActiveExtremeEvent(),
+      achievementProgress: this.achievement.getTotalProgress(),
     };
+  }
+
+  getStatistics(): SurvivalStats {
+    return this.achievement.getStatistics();
+  }
+
+  getAchievementProgress(): AchievementProgress[] {
+    return this.achievement.getAchievementProgress();
+  }
+
+  getRecentlyUnlockedAchievements(limit: number = 5) {
+    return this.achievement.getRecentlyUnlocked(limit);
   }
 
   reset(): void {
     this.character.reset();
     this._dayCounter = 0;
     this._hoursInCurrentDay = 0;
+    this._skillLevel = 1;
     this.achievement.resetStats();
     this.event.clearHistory();
     this.event.clearActiveEffects();

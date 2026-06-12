@@ -6,24 +6,41 @@ import {
   ExtremeWeatherEvent,
   WeatherEffect,
   WeatherConfig,
+  ExtremeWeatherWeights,
+  SeasonWeights,
 } from '../types';
 import { clamp, SeededRandom } from '../utils';
+
+const DEFAULT_SEASON_WEIGHTS: Record<string, SeasonWeights & { tempOffset: number }> = {
+  temperate: { tempOffset: 0, rainChance: 0.25, snowChance: 0.05, fogChance: 0.08, windyChance: 0.07 },
+  tropical: { tempOffset: 10, rainChance: 0.35, snowChance: 0, fogChance: 0.05, windyChance: 0.05 },
+  arctic: { tempOffset: -20, rainChance: 0.1, snowChance: 0.4, fogChance: 0.06, windyChance: 0.1 },
+  desert: { tempOffset: 15, rainChance: 0.05, snowChance: 0, fogChance: 0.03, windyChance: 0.12 },
+};
+
+const DEFAULT_EXTREME_WEIGHTS: ExtremeWeatherWeights = {
+  storm: 1,
+  blizzard: 1,
+  heatwave: 1,
+  cold_wave: 1,
+};
 
 const DEFAULT_WEATHER_CONFIG: WeatherConfig = {
   dayLength: 16,
   nightLength: 8,
   baseTemperature: 20,
   temperatureAmplitude: 10,
+  nightTemperatureDrop: 5,
   extremeWeatherChance: 0.1,
+  extremeWeatherMinDuration: 2,
+  extremeWeatherMaxDuration: 8,
+  extremeWeatherWeights: { ...DEFAULT_EXTREME_WEIGHTS },
+  seasonWeights: { ...DEFAULT_SEASON_WEIGHTS.temperate },
   seasonType: 'temperate',
+  tempOffset: 0,
 };
 
-const WEATHER_TYPES_NORMAL: WeatherType[] = ['clear', 'cloudy', 'fog', 'windy'];
-const WEATHER_TYPES_RAIN: WeatherType[] = ['rain', 'heavy_rain'];
-const WEATHER_TYPES_SNOW: WeatherType[] = ['snow'];
-const WEATHER_TYPES_EXTREME: WeatherType[] = ['storm', 'blizzard', 'heatwave', 'cold_wave'];
-
-const EXTREME_WEATHER_TEMPLATES: Record<WeatherType, { name: string; description: string; effects: WeatherEffect[]; tipText: string }> = {
+const EXTREME_WEATHER_TEMPLATES: Record<string, { name: string; description: string; effects: WeatherEffect[]; tipText: string }> = {
   storm: {
     name: '暴风雨',
     description: '狂风暴雨席卷而来，视线模糊，行动困难。',
@@ -67,20 +84,6 @@ const EXTREME_WEATHER_TEMPLATES: Record<WeatherType, { name: string; description
     ],
     tipText: '寒潮来袭！增加衣物，生火保暖，避免长时间暴露。',
   },
-  clear: { name: '', description: '', effects: [], tipText: '' },
-  cloudy: { name: '', description: '', effects: [], tipText: '' },
-  rain: { name: '', description: '', effects: [], tipText: '' },
-  heavy_rain: { name: '', description: '', effects: [], tipText: '' },
-  snow: { name: '', description: '', effects: [], tipText: '' },
-  fog: { name: '', description: '', effects: [], tipText: '' },
-  windy: { name: '', description: '', effects: [], tipText: '' },
-};
-
-const SEASON_TEMP_MODIFIERS: Record<string, { tempOffset: number; rainChance: number; snowChance: number; extremeChance: number }> = {
-  temperate: { tempOffset: 0, rainChance: 0.25, snowChance: 0.05, extremeChance: 0.1 },
-  tropical: { tempOffset: 10, rainChance: 0.35, snowChance: 0, extremeChance: 0.15 },
-  arctic: { tempOffset: -20, rainChance: 0.1, snowChance: 0.4, extremeChance: 0.2 },
-  desert: { tempOffset: 15, rainChance: 0.05, snowChance: 0, extremeChance: 0.12 },
 };
 
 export class WeatherGeneration {
@@ -93,11 +96,28 @@ export class WeatherGeneration {
   private extremeEventRemaining: number = 0;
 
   constructor(config: Partial<WeatherConfig>, rng: SeededRandom) {
-    this.config = { ...DEFAULT_WEATHER_CONFIG, ...config };
+    const seasonDefaults = DEFAULT_SEASON_WEIGHTS[config.seasonType ?? 'temperate'];
+    const resolvedSeasonWeights: SeasonWeights = {
+      rainChance: config.seasonWeights?.rainChance ?? seasonDefaults.rainChance,
+      snowChance: config.seasonWeights?.snowChance ?? seasonDefaults.snowChance,
+      fogChance: config.seasonWeights?.fogChance ?? seasonDefaults.fogChance,
+      windyChance: config.seasonWeights?.windyChance ?? seasonDefaults.windyChance,
+    };
+
+    this.config = {
+      ...DEFAULT_WEATHER_CONFIG,
+      ...config,
+      extremeWeatherWeights: {
+        ...DEFAULT_EXTREME_WEIGHTS,
+        ...(config.extremeWeatherWeights ?? {}),
+      },
+      seasonWeights: resolvedSeasonWeights,
+      tempOffset: config.tempOffset ?? seasonDefaults.tempOffset,
+    };
     this.rng = rng;
     this.currentWeather = {
       type: 'clear',
-      temperature: this.config.baseTemperature,
+      temperature: this.config.baseTemperature + this.config.tempOffset,
       windSpeed: 5,
       visibility: 100,
       humidity: 50,
@@ -118,9 +138,14 @@ export class WeatherGeneration {
     this.currentWeather.hour = hourOfDay;
 
     const tempCycle = Math.sin((hourOfDay / dayTotal) * Math.PI * 2 - Math.PI / 2);
-    const baseTemp = this.config.baseTemperature + tempCycle * this.config.temperatureAmplitude;
-    const season = SEASON_TEMP_MODIFIERS[this.config.seasonType];
-    this.currentWeather.temperature = baseTemp + season.tempOffset;
+    let baseTemp = this.config.baseTemperature + tempCycle * this.config.temperatureAmplitude + this.config.tempOffset;
+
+    const isNight = hourOfDay >= this.config.dayLength;
+    if (isNight) {
+      baseTemp -= this.config.nightTemperatureDrop;
+    }
+
+    this.currentWeather.temperature = baseTemp;
 
     if (this.activeExtremeEvent) {
       this.extremeEventRemaining -= deltaHours;
@@ -140,7 +165,7 @@ export class WeatherGeneration {
       }
     } else {
       this.currentWeather.visibility = 100;
-      this.rollWeatherType(season);
+      this.rollWeatherType();
     }
 
     this.currentWeather.temperature = Math.round(this.currentWeather.temperature * 10) / 10;
@@ -149,36 +174,98 @@ export class WeatherGeneration {
     return { ...this.currentWeather };
   }
 
-  private rollWeatherType(season: { rainChance: number; snowChance: number; extremeChance: number }): void {
-    if (this.rng.chance(season.extremeChance)) {
-      const extreme = this.rng.pick(WEATHER_TYPES_EXTREME);
-      this.currentWeather.type = extreme;
-      this.triggerExtremeWeather(extreme);
-      return;
+  private rollWeatherType(): void {
+    const sw = this.config.seasonWeights;
+    const extremeChance = this.config.extremeWeatherChance;
+
+    if (extremeChance > 0 && this.rng.chance(extremeChance)) {
+      const type = this.pickExtremeType();
+      if (type) {
+        this.currentWeather.type = type;
+        this.triggerExtremeWeather(type);
+        return;
+      }
     }
 
     const roll = this.rng.next();
-    if (roll < season.snowChance && this.currentWeather.temperature < 2) {
-      this.currentWeather.type = this.rng.pick(WEATHER_TYPES_SNOW);
-    } else if (roll < season.snowChance + season.rainChance) {
-      this.currentWeather.type = this.rng.pick(WEATHER_TYPES_RAIN);
-      this.currentWeather.humidity = clamp(this.currentWeather.humidity + 30, 0, 100);
-    } else if (roll < season.snowChance + season.rainChance + 0.15) {
-      this.currentWeather.type = this.rng.pick(['fog', 'windy'] as WeatherType[]);
-    } else {
-      this.currentWeather.type = this.rng.pick(WEATHER_TYPES_NORMAL);
+    let cumulative = 0;
+
+    cumulative += sw.snowChance;
+    if (roll < cumulative && this.currentWeather.temperature < 2) {
+      this.currentWeather.type = this.rng.pick<WeatherType>(['snow']);
+      this.currentWeather.humidity = this.rng.nextInt(60, 85);
+      this.currentWeather.windSpeed = this.rng.nextInt(5, 20);
+      return;
     }
 
-    this.currentWeather.windSpeed = this.rng.nextInt(0, this.currentWeather.type === 'windy' ? 60 : 25);
-    this.currentWeather.humidity = this.currentWeather.type === 'rain' || this.currentWeather.type === 'heavy_rain'
-      ? this.rng.nextInt(70, 95)
-      : this.rng.nextInt(30, 70);
+    cumulative += sw.rainChance;
+    if (roll < cumulative) {
+      this.currentWeather.type = this.rng.pick<WeatherType>(['rain', 'heavy_rain']);
+      this.currentWeather.humidity = this.rng.nextInt(70, 95);
+      this.currentWeather.windSpeed = this.rng.nextInt(5, 25);
+      return;
+    }
+
+    cumulative += sw.fogChance;
+    if (roll < cumulative) {
+      this.currentWeather.type = 'fog';
+      this.currentWeather.visibility = this.rng.nextInt(20, 50);
+      this.currentWeather.humidity = this.rng.nextInt(80, 95);
+      this.currentWeather.windSpeed = this.rng.nextInt(0, 5);
+      return;
+    }
+
+    cumulative += sw.windyChance;
+    if (roll < cumulative) {
+      this.currentWeather.type = 'windy';
+      this.currentWeather.windSpeed = this.rng.nextInt(30, 60);
+      this.currentWeather.humidity = this.rng.nextInt(20, 50);
+      return;
+    }
+
+    this.currentWeather.type = this.rng.pick<WeatherType>(['clear', 'cloudy']);
+    this.currentWeather.windSpeed = this.rng.nextInt(0, 15);
+    this.currentWeather.humidity = this.rng.nextInt(30, 60);
+  }
+
+  private pickExtremeType(): WeatherType | null {
+    const weights = this.config.extremeWeatherWeights;
+    const entries: { type: WeatherType; weight: number }[] = ([
+      { type: 'storm' as WeatherType, weight: weights.storm ?? 0 },
+      { type: 'blizzard' as WeatherType, weight: weights.blizzard ?? 0 },
+      { type: 'heatwave' as WeatherType, weight: weights.heatwave ?? 0 },
+      { type: 'cold_wave' as WeatherType, weight: weights.cold_wave ?? 0 },
+    ] as const).filter((e): e is { type: WeatherType; weight: number } => e.weight > 0);
+
+    if (entries.length === 0) return null;
+
+    const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
+    let roll = this.rng.next() * totalWeight;
+    for (const entry of entries) {
+      roll -= entry.weight;
+      if (roll <= 0) return entry.type;
+    }
+    return entries[entries.length - 1].type;
   }
 
   triggerExtremeWeather(type: WeatherType): ExtremeWeatherEvent {
     const template = EXTREME_WEATHER_TEMPLATES[type];
+    if (!template) {
+      return {
+        type,
+        name: type,
+        description: '',
+        duration: 0,
+        intensity: 0,
+        effects: [],
+        tipText: '',
+      };
+    }
+
     const intensity = this.rng.nextFloat(0.5, 1.0);
-    const duration = this.rng.nextFloat(2, 8);
+    const minDuration = this.config.extremeWeatherMinDuration;
+    const maxDuration = this.config.extremeWeatherMaxDuration;
+    const duration = this.rng.nextFloat(minDuration, Math.max(minDuration, maxDuration));
 
     const event: ExtremeWeatherEvent = {
       type,
@@ -195,6 +282,27 @@ export class WeatherGeneration {
     this.currentWeather.type = type;
 
     return { ...event };
+  }
+
+  updateConfig(partial: Partial<WeatherConfig>): void {
+    if (partial.extremeWeatherWeights) {
+      this.config.extremeWeatherWeights = {
+        ...this.config.extremeWeatherWeights,
+        ...partial.extremeWeatherWeights,
+      };
+    }
+    if (partial.seasonWeights) {
+      this.config.seasonWeights = {
+        ...this.config.seasonWeights,
+        ...partial.seasonWeights,
+      };
+    }
+    const { extremeWeatherWeights: _ew, seasonWeights: _sw, ...rest } = partial;
+    Object.assign(this.config, rest);
+  }
+
+  getConfig(): WeatherConfig {
+    return { ...this.config };
   }
 
   getDayNightCycle(): DayNightCycle {

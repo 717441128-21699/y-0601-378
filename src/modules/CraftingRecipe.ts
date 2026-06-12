@@ -4,12 +4,23 @@ import {
   CraftCheckResult,
   CraftResult,
   GatherSource,
-  GatherDrop,
   GatherResult,
   GatheredItem,
   InventoryItem,
 } from '../types';
-import { SeededRandom, generateId } from '../utils';
+import { SeededRandom } from '../utils';
+
+export interface CraftingCallbacks {
+  getItemCount: (defId: string) => number;
+  consumeItemByDefId: (defId: string, quantity: number) => boolean;
+  hasTool: (defId: string) => boolean;
+  addItem: (defId: string, quantity: number) => InventoryItem | null;
+  addItemWithOverflow: (defId: string, quantity: number) => { added: InventoryItem[]; overflowCount: number };
+  getSkillLevel: () => number;
+  hasFacility: (facilityType: string) => boolean;
+  getFacilityName: (facilityType: string) => string | null;
+  getInventoryFreeSlots: () => number;
+}
 
 export class CraftingRecipe {
   private recipes: Map<string, RecipeDef> = new Map();
@@ -17,26 +28,11 @@ export class CraftingRecipe {
   private sourceRespawnTimers: Map<string, number> = new Map();
   private unlockedRecipes: Set<string> = new Set();
   private rng: SeededRandom;
+  private cb: CraftingCallbacks;
 
-  private getInventoryItemCount: (defId: string) => number;
-  private consumeItemByDefId: (defId: string, quantity: number) => boolean;
-  private hasTool: (defId: string) => boolean;
-  private addCraftedItem: (defId: string, quantity: number) => InventoryItem | null;
-
-  constructor(
-    rng: SeededRandom,
-    inventoryCallbacks: {
-      getItemCount: (defId: string) => number;
-      consumeItemByDefId: (defId: string, quantity: number) => boolean;
-      hasTool: (defId: string) => boolean;
-      addCraftedItem: (defId: string, quantity: number) => InventoryItem | null;
-    }
-  ) {
+  constructor(rng: SeededRandom, callbacks: CraftingCallbacks) {
     this.rng = rng;
-    this.getInventoryItemCount = inventoryCallbacks.getItemCount;
-    this.consumeItemByDefId = inventoryCallbacks.consumeItemByDefId;
-    this.hasTool = inventoryCallbacks.hasTool;
-    this.addCraftedItem = inventoryCallbacks.addCraftedItem;
+    this.cb = callbacks;
   }
 
   registerRecipe(recipe: RecipeDef): void {
@@ -81,28 +77,35 @@ export class CraftingRecipe {
     if (!recipe) {
       return {
         canCraft: false,
+        unlocked: false,
         missingMaterials: [],
         missingTools: [],
         missingSkill: false,
         missingFacility: false,
+        inventoryFull: false,
+        inventoryFreeSlots: this.cb.getInventoryFreeSlots(),
         tipText: `未找到配方: ${recipeId}`,
       };
     }
 
-    if (!this.unlockedRecipes.has(recipeId) && recipe.unlockCondition) {
+    const isUnlocked = !recipe.unlockCondition || this.unlockedRecipes.has(recipeId);
+    if (!isUnlocked) {
       return {
         canCraft: false,
+        unlocked: false,
         missingMaterials: [],
         missingTools: [],
         missingSkill: false,
         missingFacility: false,
-        tipText: `配方未解锁，需要满足条件: ${recipe.unlockCondition}`,
+        inventoryFull: false,
+        inventoryFreeSlots: this.cb.getInventoryFreeSlots(),
+        tipText: `配方「${recipe.name}」未解锁，需要满足条件: ${recipe.unlockCondition}`,
       };
     }
 
     const missingMaterials: RecipeMaterial[] = [];
     for (const mat of recipe.materials) {
-      const have = this.getInventoryItemCount(mat.itemId);
+      const have = this.cb.getItemCount(mat.itemId);
       if (have < mat.quantity) {
         missingMaterials.push({ itemId: mat.itemId, quantity: mat.quantity - have });
       }
@@ -111,35 +114,64 @@ export class CraftingRecipe {
     const missingTools: string[] = [];
     if (recipe.requiredTools) {
       for (const toolId of recipe.requiredTools) {
-        if (!this.hasTool(toolId)) {
+        if (!this.cb.hasTool(toolId)) {
           missingTools.push(toolId);
         }
       }
     }
 
-    const result: CraftCheckResult = {
-      canCraft: missingMaterials.length === 0 && missingTools.length === 0,
-      missingMaterials,
-      missingTools,
-      missingSkill: false,
-      missingFacility: false,
-      tipText: '',
-    };
+    const currentSkill = this.cb.getSkillLevel();
+    const requiredSkill = recipe.requiredSkill ?? 0;
+    const missingSkill = currentSkill < requiredSkill;
 
-    if (result.canCraft) {
-      result.tipText = `可以制作: ${recipe.name}`;
-    } else {
-      const parts: string[] = [];
-      if (missingMaterials.length > 0) {
-        parts.push(`缺少材料: ${missingMaterials.map((m) => `${m.itemId}×${m.quantity}`).join(', ')}`);
-      }
-      if (missingTools.length > 0) {
-        parts.push(`缺少工具: ${missingTools.join(', ')}`);
-      }
-      result.tipText = parts.join('；');
+    const hasRequiredFacility = !recipe.requiredFacility || this.cb.hasFacility(recipe.requiredFacility);
+    const missingFacility = !hasRequiredFacility;
+    const requiredFacilityName = recipe.requiredFacility
+      ? this.cb.getFacilityName(recipe.requiredFacility)
+      : undefined;
+
+    const freeSlots = this.cb.getInventoryFreeSlots();
+    const needsSlot = recipe.result.quantity > 0;
+    const inventoryFull = needsSlot && freeSlots <= 0;
+
+    const canCraft = missingMaterials.length === 0
+      && missingTools.length === 0
+      && !missingSkill
+      && !missingFacility
+      && !inventoryFull;
+
+    const parts: string[] = [];
+    if (!isUnlocked) parts.push(`配方未解锁，需满足: ${recipe.unlockCondition}`);
+    if (missingMaterials.length > 0) {
+      parts.push(`缺少材料: ${missingMaterials.map((m) => `${m.itemId}×${m.quantity}`).join(', ')}`);
+    }
+    if (missingTools.length > 0) {
+      parts.push(`缺少工具: ${missingTools.join(', ')}`);
+    }
+    if (missingSkill) {
+      parts.push(`技能不足: 需要等级 ${requiredSkill}，当前等级 ${currentSkill}`);
+    }
+    if (missingFacility) {
+      parts.push(`缺少设施: 需要${requiredFacilityName ?? recipe.requiredFacility}`);
+    }
+    if (inventoryFull) {
+      parts.push(`背包已满，无法放入制作产物（剩余空位: ${freeSlots}）`);
     }
 
-    return result;
+    return {
+      canCraft,
+      unlocked: isUnlocked,
+      missingMaterials,
+      missingTools,
+      missingSkill,
+      currentSkill: missingSkill ? currentSkill : undefined,
+      requiredSkill: missingSkill ? requiredSkill : undefined,
+      missingFacility,
+      requiredFacilityName: requiredFacilityName ?? undefined,
+      inventoryFull,
+      inventoryFreeSlots: freeSlots,
+      tipText: canCraft ? `可以制作: ${recipe.name}` : parts.join('；'),
+    };
   }
 
   craft(recipeId: string): CraftResult {
@@ -148,33 +180,72 @@ export class CraftingRecipe {
       return {
         success: false,
         materialsConsumed: false,
+        inventoryFull: check.inventoryFull,
+        itemsActuallyAdded: 0,
+        itemsOverflow: 0,
         tipText: check.tipText,
       };
     }
 
     const recipe = this.recipes.get(recipeId)!;
 
+    const consumedMap = new Map<string, { needed: number; consumed: number }>();
+    for (const mat of recipe.materials) {
+      consumedMap.set(mat.itemId, { needed: mat.quantity, consumed: 0 });
+    }
+
     let allConsumed = true;
     for (const mat of recipe.materials) {
-      if (!this.consumeItemByDefId(mat.itemId, mat.quantity)) {
-        allConsumed = false;
-      }
+      const before = this.cb.getItemCount(mat.itemId);
+      const ok = this.cb.consumeItemByDefId(mat.itemId, mat.quantity);
+      const after = this.cb.getItemCount(mat.itemId);
+      const actuallyConsumed = before - after;
+      const entry = consumedMap.get(mat.itemId)!;
+      entry.consumed = actuallyConsumed;
+      if (!ok) allConsumed = false;
     }
 
     if (!allConsumed) {
+      const details = Array.from(consumedMap.entries())
+        .filter(([, e]) => e.consumed < e.needed)
+        .map(([id, e]) => `${id}需要${e.needed}实际消耗${e.consumed}`)
+        .join(', ');
       return {
         success: false,
         materialsConsumed: false,
-        tipText: '材料消耗失败，制作中断。',
+        inventoryFull: false,
+        itemsActuallyAdded: 0,
+        itemsOverflow: 0,
+        tipText: `材料消耗不足，制作中断。${details}`,
       };
     }
 
-    const craftedItem = this.addCraftedItem(recipe.result.itemId, recipe.result.quantity);
+    const { added, overflowCount } = this.cb.addItemWithOverflow(
+      recipe.result.itemId,
+      recipe.result.quantity
+    );
+
+    const itemsActuallyAdded = added.reduce((s, i) => s + i.quantity, 0);
+
+    if (overflowCount > 0) {
+      return {
+        success: true,
+        resultItem: added[0] ?? undefined,
+        materialsConsumed: true,
+        inventoryFull: true,
+        itemsActuallyAdded,
+        itemsOverflow: overflowCount,
+        tipText: `制作成功，但背包空间不足！获得 ${recipe.result.name} ×${itemsActuallyAdded}，有 ${overflowCount} 个物品溢出丢失。`,
+      };
+    }
 
     return {
       success: true,
-      resultItem: craftedItem ?? undefined,
+      resultItem: added[0] ?? undefined,
       materialsConsumed: true,
+      inventoryFull: false,
+      itemsActuallyAdded,
+      itemsOverflow: 0,
       tipText: `制作成功！获得 ${recipe.result.name} ×${recipe.result.quantity}`,
     };
   }
@@ -185,6 +256,8 @@ export class CraftingRecipe {
       return {
         sourceId,
         items: [],
+        addedToInventory: [],
+        overflowItems: [],
         exhausted: true,
         tipText: `找不到采集源: ${sourceId}`,
       };
@@ -195,15 +268,19 @@ export class CraftingRecipe {
       return {
         sourceId,
         items: [],
+        addedToInventory: [],
+        overflowItems: [],
         exhausted: true,
         tipText: `${source.name} 已耗尽，将在 ${Math.ceil(remaining)} 小时后恢复。`,
       };
     }
 
-    if (source.requiredTool && !this.hasTool(source.requiredTool)) {
+    if (source.requiredTool && !this.cb.hasTool(source.requiredTool)) {
       return {
         sourceId,
         items: [],
+        addedToInventory: [],
+        overflowItems: [],
         exhausted: false,
         tipText: `需要工具 ${source.requiredTool} 才能采集 ${source.name}。`,
       };
@@ -225,13 +302,35 @@ export class CraftingRecipe {
 
     this.sourceRespawnTimers.set(sourceId, source.respawnTime);
 
-    const tipText = gathered.length > 0
-      ? `从${source.name}采集到: ${gathered.map((g) => `${g.name}×${g.quantity}`).join(', ')}`
-      : `${source.name}没有产出任何东西。`;
+    const addedToInventory: GatheredItem[] = [];
+    const overflowItems: GatheredItem[] = [];
+
+    for (const item of gathered) {
+      const { added, overflowCount } = this.cb.addItemWithOverflow(item.itemId, item.quantity);
+      const actualAdded = added.reduce((s, i) => s + i.quantity, 0);
+      if (actualAdded > 0) {
+        addedToInventory.push({ ...item, quantity: actualAdded });
+      }
+      if (overflowCount > 0) {
+        overflowItems.push({ ...item, quantity: overflowCount });
+      }
+    }
+
+    let tipText = '';
+    if (gathered.length === 0) {
+      tipText = `${source.name}没有产出任何东西。`;
+    } else if (overflowItems.length > 0) {
+      const overflowDesc = overflowItems.map((g) => `${g.name}×${g.quantity}`).join(', ');
+      tipText = `从${source.name}采集到物品，但背包空间不足，${overflowDesc} 溢出丢失！`;
+    } else {
+      tipText = `从${source.name}采集到: ${addedToInventory.map((g) => `${g.name}×${g.quantity}`).join(', ')}`;
+    }
 
     return {
       sourceId,
       items: gathered,
+      addedToInventory,
+      overflowItems,
       exhausted: false,
       tipText,
     };
