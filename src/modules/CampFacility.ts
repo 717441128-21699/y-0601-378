@@ -253,4 +253,21 @@ export class CampFacility {
     this.facilityHealth.delete(id);
     return this.facilities.delete(id);
   }
+
+  getSnapshot(): { facilities: { id: string; def: FacilityDef; health: number }[] } {
+    const facilities: { id: string; def: FacilityDef; health: number }[] = [];
+    for (const [id, def] of this.facilities) {
+      facilities.push({ id, def: { ...def, effects: def.effects.map((e) => ({ ...e })), upgradeMaterials: def.upgradeMaterials.map((m) => ({ ...m })) }, health: this.facilityHealth.get(id) ?? 100 });
+    }
+    return { facilities };
+  }
+
+  loadSnapshot(snapshot: { facilities: { id: string; def: FacilityDef; health: number }[] }): void {
+    this.facilities.clear();
+    this.facilityHealth.clear();
+    for (const entry of snapshot.facilities) {
+      this.facilities.set(entry.id, { ...entry.def, effects: entry.def.effects.map((e) => ({ ...e })), upgradeMaterials: entry.def.upgradeMaterials.map((m) => ({ ...m })) });
+      this.facilityHealth.set(entry.id, entry.health);
+    }
+  }
 }

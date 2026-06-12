@@ -89,6 +89,8 @@ export class CraftingRecipe {
         facilityRequired: null,
         facilityPresent: true,
         resultItem: { itemId: '', name: '', quantity: 0 },
+        isFood: false,
+        hasExistingStack: false,
         freeSlots: this.cb.getInventoryFreeSlots(),
         slotsNeeded: 0,
         willOverflow: false,
@@ -115,10 +117,34 @@ export class CraftingRecipe {
     const freeSlots = this.cb.getInventoryFreeSlots();
     const isFoodResult = this.cb.isFood(recipe.result.itemId);
     const hasStack = this.cb.hasExistingStack(recipe.result.itemId);
-    const slotsNeeded = (isFoodResult && hasStack) ? 0 : 1;
-    const willOverflow = freeSlots < slotsNeeded;
-    const overflowCount = willOverflow ? recipe.result.quantity : 0;
-    const actualAddable = willOverflow ? 0 : recipe.result.quantity;
+
+    let slotsNeeded: number;
+    let actualAddable: number;
+    let overflowCount: number;
+
+    if (isFoodResult) {
+      if (hasStack) {
+        slotsNeeded = 0;
+        actualAddable = recipe.result.quantity;
+        overflowCount = 0;
+      } else {
+        slotsNeeded = 1;
+        if (freeSlots >= slotsNeeded) {
+          actualAddable = recipe.result.quantity;
+          overflowCount = 0;
+        } else {
+          actualAddable = 0;
+          overflowCount = recipe.result.quantity;
+        }
+      }
+    } else {
+      slotsNeeded = recipe.result.quantity;
+      const canFit = Math.min(slotsNeeded, freeSlots);
+      actualAddable = canFit;
+      overflowCount = Math.max(0, slotsNeeded - freeSlots);
+    }
+
+    const willOverflow = overflowCount > 0;
 
     const missingMaterials: RecipeMaterial[] = [];
     for (const mat of recipe.materials) {
@@ -163,6 +189,8 @@ export class CraftingRecipe {
       facilityRequired,
       facilityPresent,
       resultItem: { ...recipe.result },
+      isFood: isFoodResult,
+      hasExistingStack: hasStack,
       freeSlots,
       slotsNeeded,
       willOverflow,
@@ -363,6 +391,8 @@ export class CraftingRecipe {
         reason: `找不到采集源: ${sourceId}`,
         potentialDrops: [],
         freeSlots: 0,
+        estimatedMinSlotsNeeded: 0,
+        estimatedMaxSlotsNeeded: 0,
         estimatedMaxItems: 0,
         potentialOverflow: false,
         tipText: `找不到采集源: ${sourceId}`,
@@ -375,9 +405,11 @@ export class CraftingRecipe {
         canGather: false,
         reason: `${source.name} 已耗尽，将在 ${Math.ceil(remaining)} 小时后恢复`,
         potentialDrops: source.baseDrops.map((d) => ({
-          itemId: d.itemId, name: d.name, minQty: d.minQuantity, maxQty: d.maxQuantity, chance: d.chance,
+          itemId: d.itemId, name: d.name, minQty: d.minQuantity, maxQty: d.maxQuantity, chance: d.chance, isFood: this.cb.isFood(d.itemId),
         })),
         freeSlots: this.cb.getInventoryFreeSlots(),
+        estimatedMinSlotsNeeded: 0,
+        estimatedMaxSlotsNeeded: 0,
         estimatedMaxItems: 0,
         potentialOverflow: true,
         tipText: `${source.name} 已耗尽，将在 ${Math.ceil(remaining)} 小时后恢复。`,
@@ -389,9 +421,11 @@ export class CraftingRecipe {
         canGather: false,
         reason: `需要工具 ${source.requiredTool}`,
         potentialDrops: source.baseDrops.map((d) => ({
-          itemId: d.itemId, name: d.name, minQty: d.minQuantity, maxQty: d.maxQuantity, chance: d.chance,
+          itemId: d.itemId, name: d.name, minQty: d.minQuantity, maxQty: d.maxQuantity, chance: d.chance, isFood: this.cb.isFood(d.itemId),
         })),
         freeSlots: this.cb.getInventoryFreeSlots(),
+        estimatedMinSlotsNeeded: 0,
+        estimatedMaxSlotsNeeded: 0,
         estimatedMaxItems: 0,
         potentialOverflow: false,
         tipText: `需要工具 ${source.requiredTool} 才能采集 ${source.name}。`,
@@ -405,20 +439,40 @@ export class CraftingRecipe {
       minQty: d.minQuantity,
       maxQty: d.maxQuantity,
       chance: Math.min(1, d.chance + toolBonus * 0.1),
+      isFood: this.cb.isFood(d.itemId),
     }));
+
     const estimatedMaxItems = potentialDrops.reduce((s, d) => s + d.maxQty, 0);
-    const potentialOverflow = estimatedMaxItems > freeSlots && freeSlots > 0;
+
+    let estimatedMinSlotsNeeded = 0;
+    let estimatedMaxSlotsNeeded = 0;
+    for (const drop of potentialDrops) {
+      if (drop.isFood) {
+        const hasStack = this.cb.hasExistingStack(drop.itemId);
+        if (!hasStack) {
+          estimatedMinSlotsNeeded += 1;
+          estimatedMaxSlotsNeeded += 1;
+        }
+      } else {
+        estimatedMinSlotsNeeded += drop.minQty;
+        estimatedMaxSlotsNeeded += drop.maxQty;
+      }
+    }
+
+    const potentialOverflow = estimatedMaxSlotsNeeded > freeSlots;
 
     return {
       canGather: true,
       reason: '',
       potentialDrops,
       freeSlots,
+      estimatedMinSlotsNeeded,
+      estimatedMaxSlotsNeeded,
       estimatedMaxItems,
       potentialOverflow,
       tipText: potentialOverflow
-        ? `背包空位有限（${freeSlots}），部分产出可能溢出。`
-        : `可以从${source.name}采集，预计产出 ${estimatedMaxItems} 件物品。`,
+        ? `背包空位有限（${freeSlots}），可能需要 ${estimatedMinSlotsNeeded}-${estimatedMaxSlotsNeeded} 个槽位，部分产出可能溢出。`
+        : `可以从${source.name}采集，预计产出 ${estimatedMaxItems} 件物品，需要 ${estimatedMinSlotsNeeded}-${estimatedMaxSlotsNeeded} 个槽位。`,
     };
   }
 
@@ -537,5 +591,29 @@ export class CraftingRecipe {
 
   getAllGatherSources(): GatherSource[] {
     return Array.from(this.gatherSources.values());
+  }
+
+  getSnapshot(): {
+    unlockedRecipes: string[];
+    sourceRespawnTimers: Record<string, number>;
+  } {
+    return {
+      unlockedRecipes: Array.from(this.unlockedRecipes),
+      sourceRespawnTimers: Object.fromEntries(this.sourceRespawnTimers),
+    };
+  }
+
+  loadSnapshot(snapshot: {
+    unlockedRecipes: string[];
+    sourceRespawnTimers: Record<string, number>;
+  }): void {
+    this.unlockedRecipes.clear();
+    for (const id of snapshot.unlockedRecipes) {
+      this.unlockedRecipes.add(id);
+    }
+    this.sourceRespawnTimers.clear();
+    for (const [k, v] of Object.entries(snapshot.sourceRespawnTimers)) {
+      this.sourceRespawnTimers.set(k, v);
+    }
   }
 }

@@ -209,4 +209,12 @@ export class CharacterStatus {
       stamina: this.config.maxStamina,
     };
   }
+
+  getSnapshot(): { vitals: Vitals } {
+    return { vitals: { ...this.vitals } };
+  }
+
+  loadSnapshot(snapshot: { vitals: Vitals }): void {
+    this.vitals = { ...snapshot.vitals };
+  }
 }

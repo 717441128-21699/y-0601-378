@@ -35,6 +35,14 @@ export class SeededRandom {
     }
     return items[items.length - 1];
   }
+
+  getState(): number {
+    return this.seed;
+  }
+
+  setState(state: number): void {
+    this.seed = state;
+  }
 }
 
 export function clamp(value: number, min: number, max: number): number {

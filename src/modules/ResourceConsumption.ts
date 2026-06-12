@@ -322,4 +322,26 @@ export class ResourceConsumption {
   isTool(defId: string): boolean {
     return this.tools.has(defId);
   }
+
+  setInventoryCapacity(capacity: number): void {
+    this.inventory.capacity = capacity;
+  }
+
+  getSnapshot(): { inventory: { items: InventoryItem[]; capacity: number }; gameMinutesElapsed: number } {
+    return {
+      inventory: {
+        items: this.inventory.items.map((i) => ({ ...i })),
+        capacity: this.inventory.capacity,
+      },
+      gameMinutesElapsed: this.gameMinutesElapsed,
+    };
+  }
+
+  loadSnapshot(snapshot: { inventory: { items: InventoryItem[]; capacity: number }; gameMinutesElapsed: number }): void {
+    this.inventory = {
+      items: snapshot.inventory.items.map((i) => ({ ...i })),
+      capacity: snapshot.inventory.capacity,
+    };
+    this.gameMinutesElapsed = snapshot.gameMinutesElapsed;
+  }
 }

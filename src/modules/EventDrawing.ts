@@ -265,6 +265,27 @@ export class EventDrawing {
     this.eventHistory = [];
   }
 
+  getSnapshot(): {
+    eventHistory: EventResult[];
+    activeEffects: [string, { effect: EventEffect; remainingTicks: number }][];
+  } {
+    return {
+      eventHistory: this.eventHistory.map((r) => ({ ...r, effects: r.effects.map((e) => ({ ...e })) })),
+      activeEffects: Array.from(this.activeEffects.entries()).map(([k, v]) => [k, { effect: { ...v.effect }, remainingTicks: v.remainingTicks }]),
+    };
+  }
+
+  loadSnapshot(snapshot: {
+    eventHistory: EventResult[];
+    activeEffects: [string, { effect: EventEffect; remainingTicks: number }][];
+  }): void {
+    this.eventHistory = snapshot.eventHistory.map((r) => ({ ...r, effects: r.effects.map((e) => ({ ...e })) }));
+    this.activeEffects.clear();
+    for (const [k, v] of snapshot.activeEffects) {
+      this.activeEffects.set(k, { effect: { ...v.effect }, remainingTicks: v.remainingTicks });
+    }
+  }
+
   getEvent(id: string): SurvivalEvent | undefined {
     return this.events.get(id);
   }

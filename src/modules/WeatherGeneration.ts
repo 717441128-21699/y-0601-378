@@ -318,13 +318,15 @@ export class WeatherGeneration {
   private rollWeatherType(): void {
     const season = this.seasonState.currentSeason;
     const sw = season.seasonWeights;
-    const extremeChance = season.extremeWeatherChance;
     const blacklist = new Set<WeatherType>([
       ...this.config.extremeWeatherBlacklist,
       ...season.extremeWeatherBlacklist,
     ]);
 
-    if (extremeChance > 0 && this.rng.chance(extremeChance)) {
+    const globalExtremeSuppressed = this.config.extremeWeatherChance <= 0;
+    const seasonExtremeChance = season.extremeWeatherChance;
+
+    if (!globalExtremeSuppressed && seasonExtremeChance > 0 && this.rng.chance(seasonExtremeChance)) {
       const type = this.pickExtremeType(season, blacklist);
       if (type) {
         this.currentWeather.type = type;
@@ -554,5 +556,59 @@ export class WeatherGeneration {
       storm: 0.8, blizzard: 0.9, heatwave: 0.7, cold_wave: 0.6,
     };
     return map[type] ?? 0;
+  }
+
+  getSnapshot(): {
+    currentWeather: WeatherState;
+    currentHour: number;
+    totalHoursElapsed: number;
+    activeExtremeEvent: ExtremeWeatherEvent | null;
+    extremeEventRemaining: number;
+    calendar: SeasonCalendar;
+    seasonState: SeasonState;
+    totalDaysElapsed: number;
+    useCalendar: boolean;
+  } {
+    return {
+      currentWeather: { ...this.currentWeather },
+      currentHour: this.currentHour,
+      totalHoursElapsed: this.totalHoursElapsed,
+      activeExtremeEvent: this.activeExtremeEvent ? { ...this.activeExtremeEvent, effects: this.activeExtremeEvent.effects.map((e) => ({ ...e })) } : null,
+      extremeEventRemaining: this.extremeEventRemaining,
+      calendar: this.getCalendar(),
+      seasonState: this.getSeasonState(),
+      totalDaysElapsed: this.totalDaysElapsed,
+      useCalendar: this.useCalendar,
+    };
+  }
+
+  loadSnapshot(snapshot: {
+    currentWeather: WeatherState;
+    currentHour: number;
+    totalHoursElapsed: number;
+    activeExtremeEvent: ExtremeWeatherEvent | null;
+    extremeEventRemaining: number;
+    calendar: SeasonCalendar;
+    seasonState: SeasonState;
+    totalDaysElapsed: number;
+    useCalendar: boolean;
+  }): void {
+    this.currentWeather = { ...snapshot.currentWeather };
+    this.currentHour = snapshot.currentHour;
+    this.totalHoursElapsed = snapshot.totalHoursElapsed;
+    this.activeExtremeEvent = snapshot.activeExtremeEvent;
+    this.extremeEventRemaining = snapshot.extremeEventRemaining;
+    this.calendar = {
+      seasons: snapshot.calendar.seasons.map((s) => ({ ...s, seasonWeights: { ...s.seasonWeights }, extremeWeatherWeights: { ...s.extremeWeatherWeights }, extremeWeatherBlacklist: [...s.extremeWeatherBlacklist] })),
+      startSeasonIndex: snapshot.calendar.startSeasonIndex,
+    };
+    this.useCalendar = snapshot.useCalendar;
+    this.seasonState = {
+      currentSeason: { ...snapshot.seasonState.currentSeason, seasonWeights: { ...snapshot.seasonState.currentSeason.seasonWeights }, extremeWeatherWeights: { ...snapshot.seasonState.currentSeason.extremeWeatherWeights }, extremeWeatherBlacklist: [...snapshot.seasonState.currentSeason.extremeWeatherBlacklist] },
+      currentSeasonIndex: snapshot.seasonState.currentSeasonIndex,
+      dayInSeason: snapshot.seasonState.dayInSeason,
+      totalDaysElapsed: snapshot.seasonState.totalDaysElapsed,
+    };
+    this.totalDaysElapsed = snapshot.totalDaysElapsed;
   }
 }

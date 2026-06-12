@@ -217,8 +217,10 @@ export interface GatheredItem {
 export interface GatherPreview {
   canGather: boolean;
   reason: string;
-  potentialDrops: { itemId: string; name: string; minQty: number; maxQty: number; chance: number }[];
+  potentialDrops: { itemId: string; name: string; minQty: number; maxQty: number; chance: number; isFood: boolean }[];
   freeSlots: number;
+  estimatedMinSlotsNeeded: number;
+  estimatedMaxSlotsNeeded: number;
   estimatedMaxItems: number;
   potentialOverflow: boolean;
   tipText: string;
@@ -284,6 +286,8 @@ export interface CraftPreview {
   facilityRequired: string | null;
   facilityPresent: boolean;
   resultItem: { itemId: string; name: string; quantity: number };
+  isFood: boolean;
+  hasExistingStack: boolean;
   freeSlots: number;
   slotsNeeded: number;
   willOverflow: boolean;
@@ -516,4 +520,65 @@ export interface SurvivalSDKConfig {
   inventoryCapacity?: number;
   randomSeed?: number;
   externalCallbacks?: ExternalCallbacks;
+}
+
+export type TimelineEntryType =
+  | 'extreme_weather'
+  | 'event_result'
+  | 'facility_upgrade'
+  | 'facility_damage'
+  | 'facility_repair'
+  | 'resource_change'
+  | 'season_change'
+  | 'craft'
+  | 'gather';
+
+export interface TimelineEntry {
+  type: TimelineEntryType;
+  timestamp: number;
+  day: number;
+  data: Record<string, unknown>;
+  tipText: string;
+}
+
+export interface SaveSnapshot {
+  version: number;
+  timestamp: number;
+  character: { vitals: Vitals };
+  resource: {
+    inventory: { items: InventoryItem[]; capacity: number };
+    gameMinutesElapsed: number;
+  };
+  weather: {
+    currentWeather: WeatherState;
+    currentHour: number;
+    totalHoursElapsed: number;
+    activeExtremeEvent: ExtremeWeatherEvent | null;
+    extremeEventRemaining: number;
+    calendar: SeasonCalendar;
+    seasonState: SeasonState;
+    totalDaysElapsed: number;
+    useCalendar: boolean;
+  };
+  camp: {
+    facilities: { id: string; def: FacilityDef; health: number }[];
+  };
+  crafting: {
+    unlockedRecipes: string[];
+    sourceRespawnTimers: Record<string, number>;
+  };
+  event: {
+    eventHistory: EventResult[];
+    activeEffects: [string, { effect: EventEffect; remainingTicks: number }][];
+  };
+  achievement: {
+    stats: SurvivalStats;
+    unlockedAchievements: [string, number][];
+  };
+  sdk: {
+    dayCounter: number;
+    hoursInCurrentDay: number;
+    skillLevel: number;
+    rngState: number;
+  };
 }

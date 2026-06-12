@@ -5,6 +5,7 @@ import { CraftingRecipe, CraftingCallbacks } from './modules/CraftingRecipe';
 import { CampFacility } from './modules/CampFacility';
 import { EventDrawing } from './modules/EventDrawing';
 import { AchievementStatistics } from './modules/AchievementStatistics';
+import { Timeline } from './modules/Timeline';
 import { SeededRandom } from './utils';
 import {
   SurvivalSDKConfig,
@@ -52,6 +53,9 @@ import {
   SurvivalStats,
   TipTextContext,
   RecipeMaterial,
+  SaveSnapshot,
+  TimelineEntry,
+  TimelineEntryType,
 } from './types';
 
 export * from './types';
@@ -65,6 +69,7 @@ export class SurvivalSDK {
   readonly camp: CampFacility;
   readonly event: EventDrawing;
   readonly achievement: AchievementStatistics;
+  readonly timeline: Timeline;
 
   private rng: SeededRandom;
   private config: SurvivalSDKConfig;
@@ -72,6 +77,7 @@ export class SurvivalSDK {
   private _dayCounter: number = 0;
   private _hoursInCurrentDay: number = 0;
   private _skillLevel: number = 1;
+  private _lastSeasonName: string = '';
 
   constructor(config: SurvivalSDKConfig = {}) {
     this.config = config;
@@ -81,6 +87,7 @@ export class SurvivalSDK {
     this.character = new CharacterStatus(config.vitals);
     this.resource = new ResourceConsumption(config.inventoryCapacity ?? 20, this.rng);
     this.weather = new WeatherGeneration(config.weather ?? {}, this.rng);
+    this.timeline = new Timeline();
 
     const self = this;
     const callbacks: CraftingCallbacks = {
@@ -95,7 +102,7 @@ export class SurvivalSDK {
         const facilities = self.camp.getFacilitiesByType(type as FacilityType);
         return facilities.length > 0 ? facilities[0].name : null;
       },
-      getInventoryFreeSlots: () => self.resource.getInventoryFreeSlots(),
+      getInventoryFreeSlots: () => self.getEffectiveFreeSlots(),
       isFood: (id) => self.resource.isFood(id),
       isTool: (id) => self.resource.isTool(id),
       hasExistingStack: (id) => {
@@ -108,6 +115,8 @@ export class SurvivalSDK {
     this.camp = new CampFacility(this.rng);
     this.event = new EventDrawing(this.rng);
     this.achievement = new AchievementStatistics();
+
+    this._lastSeasonName = this.weather.getSeasonState().currentSeason.name;
   }
 
   private getEffectiveSkillLevel(): number {
@@ -120,6 +129,17 @@ export class SurvivalSDK {
     return this.camp.hasFacilityOfType(type as FacilityType);
   }
 
+  private getEffectiveInventoryCapacity(): number {
+    if (this.external.getInventoryCapacity) return this.external.getInventoryCapacity();
+    return this.resource.getInventoryCapacity();
+  }
+
+  private getEffectiveFreeSlots(): number {
+    const capacity = this.getEffectiveInventoryCapacity();
+    const used = this.resource.getInventoryUsed();
+    return Math.max(0, capacity - used);
+  }
+
   setSkillLevel(level: number): void {
     this._skillLevel = Math.max(1, level);
     if (this.external.setSkillLevel) {
@@ -129,6 +149,10 @@ export class SurvivalSDK {
 
   getSkillLevel(): number {
     return this.getEffectiveSkillLevel();
+  }
+
+  getInventoryCapacity(): number {
+    return this.getEffectiveInventoryCapacity();
   }
 
   getCampWarmthBonus(): number {
@@ -152,6 +176,14 @@ export class SurvivalSDK {
   craft(recipeId: string): CraftResult {
     const result = this.crafting.craft(recipeId);
     if (result.success) {
+      const recipe = this.crafting.getRecipe(recipeId);
+      this.timeline.record('craft', this._dayCounter, {
+        recipeId,
+        resultItem: recipe?.result.itemId ?? '',
+        quantity: result.itemsActuallyAdded,
+        overflow: result.itemsOverflow,
+      }, result.tipText);
+
       const newAchievements = this.achievement.recordCraft(result.itemsActuallyAdded);
       result.newAchievements = newAchievements.length > 0 ? newAchievements : undefined;
     }
@@ -160,7 +192,13 @@ export class SurvivalSDK {
 
   gather(sourceId: string, toolBonus: number = 0): GatherResult {
     const result = this.crafting.gather(sourceId, toolBonus);
-    if (result.addedToInventory.length > 0) {
+    if (result.items.length > 0) {
+      this.timeline.record('gather', this._dayCounter, {
+        sourceId,
+        itemsGathered: result.items.map((i) => ({ itemId: i.itemId, quantity: i.quantity })),
+        overflowCount: result.overflowItems.reduce((s, i) => s + i.quantity, 0),
+      }, result.tipText);
+
       const totalItems = result.addedToInventory.reduce((s, i) => s + i.quantity, 0);
       const newAchievements = this.achievement.recordGather(totalItems);
       result.newAchievements = newAchievements.length > 0 ? newAchievements : undefined;
@@ -180,6 +218,11 @@ export class SurvivalSDK {
   ): EventResult | null {
     const result = this.event.drawEvent(context, typeFilter);
     if (result && result.triggered) {
+      this.timeline.record('event_result', this._dayCounter, {
+        eventId: result.eventId,
+        effects: result.effects.map((e) => e.type),
+      }, result.tipText);
+
       const newAchievements = this.achievement.recordEventResolved();
       result.newAchievements = newAchievements.length > 0 ? newAchievements : undefined;
     }
@@ -192,8 +235,36 @@ export class SurvivalSDK {
   ): { success: boolean; facility?: FacilityDef; tipText: string; newAchievements?: AchievementDef[] } {
     const result = this.camp.upgradeFacility(facilityId, consumeMaterials);
     if (result.success) {
+      this.timeline.record('facility_upgrade', this._dayCounter, {
+        facilityId,
+        level: result.facility?.level,
+      }, result.tipText);
+
       const newAchievements = this.achievement.recordFacilityUpgrade();
       return { ...result, newAchievements: newAchievements.length > 0 ? newAchievements : undefined };
+    }
+    return result;
+  }
+
+  damageFacility(facilityId: string, damageAmount: number): { destroyed: boolean; health: number; tipText: string } {
+    const result = this.camp.damageFacility(facilityId, damageAmount);
+    this.timeline.record('facility_damage', this._dayCounter, {
+      facilityId,
+      damageAmount,
+      health: result.health,
+      destroyed: result.destroyed,
+    }, result.tipText);
+    return result;
+  }
+
+  repairFacility(facilityId: string, repairAmount: number): { success: boolean; health: number; tipText: string } {
+    const result = this.camp.repairFacility(facilityId, repairAmount);
+    if (result.success) {
+      this.timeline.record('facility_repair', this._dayCounter, {
+        facilityId,
+        repairAmount,
+        health: result.health,
+      }, result.tipText);
     }
     return result;
   }
@@ -215,6 +286,8 @@ export class SurvivalSDK {
 
     this.crafting.updateRespawnTimers(deltaHours);
 
+    const prevSeasonName = this._lastSeasonName;
+
     this._hoursInCurrentDay += deltaHours;
     let dayAdvanced = false;
     const dayTotal = (this.config.weather?.dayLength ?? 16) + (this.config.weather?.nightLength ?? 8);
@@ -227,6 +300,33 @@ export class SurvivalSDK {
 
     if (currentWeather.severity >= 0.5) {
       this.achievement.recordWeatherSurvived(currentWeather.type);
+    }
+
+    const activeExtreme = this.weather.getActiveExtremeEvent();
+    if (activeExtreme && currentWeather.severity >= 0.7) {
+      this.timeline.record('extreme_weather', this._dayCounter, {
+        type: activeExtreme.type,
+        name: activeExtreme.name,
+        intensity: activeExtreme.intensity,
+        remaining: activeExtreme.duration,
+      }, activeExtreme.tipText);
+    }
+
+    const seasonState = this.weather.getSeasonState();
+    if (seasonState.currentSeason.name !== prevSeasonName) {
+      this.timeline.record('season_change', this._dayCounter, {
+        from: prevSeasonName,
+        to: seasonState.currentSeason.name,
+        dayInSeason: seasonState.dayInSeason,
+      }, `季节从${prevSeasonName}变为${seasonState.currentSeason.name}`);
+      this._lastSeasonName = seasonState.currentSeason.name;
+    }
+
+    const spoiledItems = spoilage.filter((s) => s.isSpoiled);
+    if (spoiledItems.length > 0) {
+      this.timeline.record('resource_change', this._dayCounter, {
+        spoiledCount: spoiledItems.length,
+      }, `${spoiledItems.length}件食物腐败变质`);
     }
 
     const newAchievements = this.achievement.checkMilestones();
@@ -242,7 +342,7 @@ export class SurvivalSDK {
       weather: currentWeather,
       spoilage,
       dayAdvanced,
-      seasonState: this.weather.getSeasonState(),
+      seasonState,
       newAchievements,
     };
   }
@@ -269,6 +369,70 @@ export class SurvivalSDK {
 
   getExtremeWeatherBlacklist(): WeatherType[] {
     return this.weather.getExtremeWeatherBlacklist();
+  }
+
+  getTimeline(limit?: number): TimelineEntry[] {
+    return this.timeline.getEntries(limit);
+  }
+
+  getTimelineByType(type: TimelineEntryType, limit?: number): TimelineEntry[] {
+    return this.timeline.getEntriesByType(type, limit);
+  }
+
+  getTimelineByDayRange(startDay: number, endDay: number): TimelineEntry[] {
+    return this.timeline.getEntriesByDayRange(startDay, endDay);
+  }
+
+  getRecentExtremeWeather(limit: number = 10): TimelineEntry[] {
+    return this.timeline.getRecentExtremeWeather(limit);
+  }
+
+  getRecentEvents(limit: number = 10): TimelineEntry[] {
+    return this.timeline.getRecentEvents(limit);
+  }
+
+  getRecentFacilityChanges(limit: number = 10): TimelineEntry[] {
+    return this.timeline.getRecentFacilityChanges(limit);
+  }
+
+  getRecentResourceChanges(limit: number = 10): TimelineEntry[] {
+    return this.timeline.getRecentResourceChanges(limit);
+  }
+
+  save(): SaveSnapshot {
+    return {
+      version: 1,
+      timestamp: Date.now(),
+      character: this.character.getSnapshot(),
+      resource: this.resource.getSnapshot(),
+      weather: this.weather.getSnapshot(),
+      camp: this.camp.getSnapshot(),
+      crafting: this.crafting.getSnapshot(),
+      event: this.event.getSnapshot(),
+      achievement: this.achievement.getSnapshot(),
+      sdk: {
+        dayCounter: this._dayCounter,
+        hoursInCurrentDay: this._hoursInCurrentDay,
+        skillLevel: this._skillLevel,
+        rngState: this.rng.getState(),
+      },
+    };
+  }
+
+  load(snapshot: SaveSnapshot): void {
+    this.character.loadSnapshot(snapshot.character);
+    this.resource.loadSnapshot(snapshot.resource);
+    this.weather.loadSnapshot(snapshot.weather);
+    this.camp.loadSnapshot(snapshot.camp);
+    this.crafting.loadSnapshot(snapshot.crafting);
+    this.event.loadSnapshot(snapshot.event);
+    this.achievement.loadSnapshot(snapshot.achievement);
+
+    this._dayCounter = snapshot.sdk.dayCounter;
+    this._hoursInCurrentDay = snapshot.sdk.hoursInCurrentDay;
+    this._skillLevel = snapshot.sdk.skillLevel;
+    this.rng.setState(snapshot.sdk.rngState);
+    this._lastSeasonName = this.weather.getSeasonState().currentSeason.name;
   }
 
   getTipText(): string {
@@ -336,6 +500,8 @@ export class SurvivalSDK {
     this.achievement.resetStats();
     this.event.clearHistory();
     this.event.clearActiveEffects();
+    this.timeline.clear();
+    this._lastSeasonName = this.weather.getSeasonState().currentSeason.name;
   }
 }
 
@@ -351,4 +517,5 @@ export {
   CampFacility,
   EventDrawing,
   AchievementStatistics,
+  Timeline,
 };

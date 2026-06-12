@@ -324,4 +324,34 @@ export class AchievementStatistics {
     }
     return false;
   }
+
+  getSnapshot(): {
+    stats: SurvivalStats;
+    unlockedAchievements: [string, number][];
+  } {
+    return {
+      stats: this.getStatistics(),
+      unlockedAchievements: Array.from(this.unlockedAchievements.entries()),
+    };
+  }
+
+  loadSnapshot(snapshot: {
+    stats: SurvivalStats;
+    unlockedAchievements: [string, number][];
+  }): void {
+    this.stats = {
+      ...snapshot.stats,
+      weatherSurvived: { ...snapshot.stats.weatherSurvived },
+      causeOfDeath: [...snapshot.stats.causeOfDeath],
+      achievementsUnlocked: [...snapshot.stats.achievementsUnlocked],
+      recentlyUnlocked: snapshot.stats.recentlyUnlocked.map((r) => ({
+        achievement: { ...r.achievement },
+        unlockedAt: r.unlockedAt,
+      })),
+    };
+    this.unlockedAchievements.clear();
+    for (const [id, ts] of snapshot.unlockedAchievements) {
+      this.unlockedAchievements.set(id, ts);
+    }
+  }
 }
